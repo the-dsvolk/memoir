@@ -24,9 +24,10 @@ DGX Spark `spark-0e81` on the home LAN — the same split qmx uses.
 - When the other side asks a question my qmx knowledge base covers, a hint appears within ~2 s of the
   question ending (M5).
 
-**Non-goals (v1)** — full meeting summaries / action items (only my own notes get expanded), telling
-apart *multiple* remote or in-room speakers, translation, more than one client or one meeting at a
-time, any cloud service, and use away from the home LAN (no on-device fallback — decided).
+**Non-goals (v1)** — any language other than **English** (decided), translation, full meeting
+summaries / action items (only my own notes get expanded), telling apart *multiple* remote or in-room
+speakers, more than one client or one meeting at a time, any cloud service, and use away from the
+home LAN (no on-device fallback — decided).
 
 ## 2. Settled decisions
 
@@ -41,6 +42,7 @@ time, any cloud service, and use away from the home LAN (no on-device fallback �
 | D7 | **In-person mode = mic only**, labelled **Room** | Call apps only | Same pipeline minus the tap; needs no system-audio permission. |
 | D8 | **Quick notes typed on the Mac, expanded on the Spark** by `qwen3.6:35b-a3b`, the model qmx already serves via Ollama | No notes, or a new model | The transcript alone is the least useful part; notes are where the value is, and the model is already loaded. |
 | D9 | **Live assist = qmx retrieval** over its MCP endpoint, with meetings indexed into qmx | A separate RAG stack | qmx already runs embeddings, a reranker and the index on the same Spark. |
+| D10 | **English only** — ASR language fixed to English, no auto-detect | Auto-detect / per-meeting language | No language-ID flips on short chunks; English prompts and question heuristics; English-only ASR models become candidates. |
 
 ## 3. Architecture
 
@@ -203,9 +205,9 @@ succeeds but buffers are all zeros. So: a **silence watchdog** — if the call a
   ~39 GB on the GPU (Ollama embeddings + the 23 GB `qwen3.6:35b-a3b` chat model + the llama.cpp
   reranker). vLLM's default `gpu_memory_utilization` of 0.9 would starve it, so start at **0.10**
   (~12 GB) and tune in M0.
-- **Language:** forced to `English` by default (auto-detect on 1 s chunks can flip); per-meeting
-  override, `auto` allowed. **Context biasing** (`context=` names/jargon) is **off by default** — known
-  issues: hotwords repeated in output, context text leaking into transcripts.
+- **Language:** always `English` (D10) — no auto-detect, no per-meeting override. **Context biasing**
+  (`context=` names/jargon) is **off by default** — known issues: hotwords repeated in output, context
+  text leaking into transcripts.
 
 ### 5.2 Install on the Spark (rootless) — proven in M0
 
@@ -306,7 +308,7 @@ source, for re-transcription and debugging). The Mac also saves a Markdown copy 
 
 ```json
 {"type":"start","meeting_id":"3f9a…","title":"Weekly sync","app":"us.zoom.xos",
- "sources":["me","them"],"sample_rate":16000,"encoding":"pcm_s16le","language":"English"}
+ "sources":["me","them"],"sample_rate":16000,"encoding":"pcm_s16le"}
 {"type":"note","id":"n3","t":815.2,"text":"beta → Q1? ask re staffing"}
 {"type":"stop"}
 ```
@@ -386,7 +388,6 @@ MEMOIR_PORT=8770
 MEMOIR_TOKEN=<openssl rand -hex 32>
 MEMOIR_MODEL=Qwen/Qwen3-ASR-1.7B
 MEMOIR_GPU_MEM_UTIL=0.10
-MEMOIR_LANGUAGE=English
 MEMOIR_DATA_DIR=/data              # ~/.memoir inside the container
 MEMOIR_SAVE_AUDIO=false
 MEMOIR_OLLAMA_URL=http://localhost:11434
@@ -497,7 +498,7 @@ answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling re
 
 1. **0.6B or 1.7B?** Decided by M0 latency on GB10 with qmx loaded.
 2. **Install route** — NGC container (Plan A) or the community fork in a uv venv (Plan B)?
-3. **Default language** — force English, or auto-detect because some calls aren't in English?
+3. ~~Default language~~ — **decided: English only** (D10).
 4. **Zoom / WebEx helper processes** — which one actually plays call audio (M2)?
 5. **Where transcripts live** — Spark as source of truth with a Mac Markdown copy (current plan), or
    mirror both ways?
