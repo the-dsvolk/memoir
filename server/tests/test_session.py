@@ -44,22 +44,28 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(len(s.sources["me"].pcm), 2 * 5600)
         self.assertEqual(bytes(s.sources["me"].pcm[3200:6400]), bytes(3200))
 
-    def test_last_frame_is_padded_with_silence(self):
+    def test_last_frame_has_audio_and_padding(self):
         s = session()
         s.ingest("me", 0, pcm(1000))
         (last,) = s.final_frames()
         self.assertTrue(last.is_last and last.is_first)
-        self.assertEqual(last.length, FRAME)  # padding counts as audio, so the tail is always flushed
+        self.assertEqual(last.length, 4000)  # ≥ 0.25 s of audio (silence counts) and < a full frame
         self.assertEqual(last.samples.shape, (FRAME,))
         self.assertEqual(float(last.samples[1000]), 0.0)
         self.assertEqual(s.final_frames(), [])  # already ended
+
+    def test_last_frame_keeps_long_tail_and_padding(self):
+        s = session()
+        s.ingest("me", 0, pcm(FRAME - 10))
+        (last,) = s.final_frames()
+        self.assertEqual(last.length, FRAME - 10)
 
     def test_last_frame_when_audio_divides_evenly(self):
         s = session()
         s.ingest("me", 0, pcm(FRAME))
         s.ready_frames()
-        (last,) = s.final_frames()  # nothing left, but the stream still gets a full silent last frame
-        self.assertEqual((last.is_last, last.length, float(abs(last.samples).max())), (True, FRAME, 0.0))
+        (last,) = s.final_frames()  # nothing left: a silent last frame still flushes the tail
+        self.assertEqual((last.is_last, last.length, float(abs(last.samples).max())), (True, 4000, 0.0))
 
 
 class MessageTest(unittest.TestCase):
