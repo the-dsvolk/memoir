@@ -92,11 +92,13 @@ struct OverlayView: View {
                         if let last = model.transcript.lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
 
                 if model.isRecording || !model.quickNotes.isEmpty {
                     Divider()
-                    NotesPane(model: model).frame(width: 260)
+                    NotesPane(model: model)  // grows with the overlay, within limits
+                        .frame(minWidth: 240, idealWidth: 280, maxWidth: 380, maxHeight: .infinity)
                 }
             }
 

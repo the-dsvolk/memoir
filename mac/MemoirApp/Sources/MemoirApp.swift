@@ -14,7 +14,8 @@ struct MemoirApp: App {
         Window("New Call", id: "new-call") {
             NewCallView(model: model)
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)  // resizable above the content's minimum; the notes editor grows
+        .defaultSize(width: 620, height: 500)
 
         Settings {
             SettingsView(model: model)
