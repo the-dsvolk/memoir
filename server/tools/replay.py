@@ -3,7 +3,10 @@
 Usage (from server/):
     uv run --no-sync python tools/replay.py meeting.wav [--url ws://localhost:8770/v1/stream] [--speed 1.0]
 
-Latency = time from sending the last audio sample a message covers (its `upto`) to receiving it.
+Latency is reported two ways for each message covering audio up to `upto`:
+  - after chunk end:   from sending the sample at `upto` — the server's own delay (best case);
+  - after chunk start: from sending the sample one model chunk earlier — what a word spoken at the
+    start of that chunk waits (worst case). A typical word sits halfway between the two.
 """
 
 import argparse
@@ -38,7 +41,11 @@ def token() -> str:
 async def replay(path: str, url: str, speed: float, tail_s: float) -> None:
     pcm = load_pcm(path)
     sent_at: dict[int, float] = {}  # sample offset at end of each frame -> send time
-    latencies = {"partial": [], "final": []}
+    latencies = {"after chunk end": [], "after chunk start": []}
+    chunk = 0  # model chunk in samples, from the server's `ready`
+
+    def sent_time(offset: int) -> float | None:
+        return next((sent_at[k] for k in sorted(sent_at) if k >= offset), None)
 
     async with websockets.connect(url, additional_headers={"Authorization": f"Bearer {token()}"},
                                   max_size=None) as ws:
@@ -49,6 +56,7 @@ async def replay(path: str, url: str, speed: float, tail_s: float) -> None:
         if ready.get("type") != "ready":
             sys.exit(f"server refused: {ready}")
         print(f"ready: {ready['model']}, {ready['chunk_ms']} ms chunks", file=sys.stderr)
+        chunk = ready["chunk_ms"] * 16
 
         async def sender() -> None:
             t0 = time.monotonic()
@@ -63,6 +71,7 @@ async def replay(path: str, url: str, speed: float, tail_s: float) -> None:
             for i in range(int(tail_s * 10)):
                 await asyncio.sleep(0.1 / speed)
                 await ws.send(HEADER.pack(0, total + i * FRAME_SAMPLES) + silence)
+                sent_at[total + (i + 1) * FRAME_SAMPLES] = time.monotonic()
             await ws.send(json.dumps({"type": "stop"}))
 
         send_task = asyncio.create_task(sender())
@@ -70,14 +79,16 @@ async def replay(path: str, url: str, speed: float, tail_s: float) -> None:
             msg = json.loads(raw)
             kind = msg.get("type")
             if kind in ("partial", "final"):
+                now = time.monotonic()
                 upto = round(msg["upto"] * 16000)
-                sent = next((sent_at[k] for k in sorted(sent_at) if k >= upto), None)
-                if sent is not None:
-                    latencies[kind].append(time.monotonic() - sent)
+                end, start = sent_time(upto), sent_time(max(0, upto - chunk))
+                if kind == "partial" and msg["text"] and end is not None and start is not None:
+                    latencies["after chunk end"].append(now - end)
+                    latencies["after chunk start"].append(now - start)
                 if kind == "partial":
                     print(f"\r\033[K  … {msg['text']}", end="", file=sys.stderr, flush=True)
                 else:
-                    print(f"\r\033[K[{msg['t0']:6.2f}–{msg['t1']:6.2f}] {msg['text']}", flush=True)
+                    print(f"\r\033[K[{msg['seg']}] [{msg['t0']:6.2f}–{msg['t1']:6.2f}] {msg['text']}", flush=True)
             elif kind == "stopped":
                 print(f"\nstopped: {msg['path']}", file=sys.stderr)
                 break
@@ -88,8 +99,8 @@ async def replay(path: str, url: str, speed: float, tail_s: float) -> None:
     for kind, values in latencies.items():
         if values:
             q = statistics.quantiles(values, n=20) if len(values) > 1 else values * 19
-            print(f"{kind} latency: p50 {statistics.median(values):.2f} s, p95 {q[18]:.2f} s, "
-                  f"max {max(values):.2f} s ({len(values)} messages)", file=sys.stderr)
+            print(f"partial latency {kind}: p50 {statistics.median(values):.2f} s, p95 {q[18]:.2f} s, "
+                  f"max {max(values):.2f} s ({len(values)} partials)", file=sys.stderr)
 
 
 def main() -> None:

@@ -6,7 +6,6 @@ Everything here must run on one thread — the server's single ASR executor (DES
 """
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -17,30 +16,11 @@ from nemo.collections.asr.inference.factory.pipeline_builder import PipelineBuil
 from nemo.collections.asr.inference.streaming.framing.request import Frame
 from nemo.collections.asr.inference.streaming.framing.request_options import ASRRequestOptions
 
+from .frames import StepResult, StreamFrame
 from .settings import CHUNK_MS_TO_RIGHT_CONTEXT
 
 log = logging.getLogger(__name__)
 CONFIG = Path(__file__).parent / "conf" / "cache_aware_rnnt.yaml"
-
-
-@dataclass(frozen=True)
-class StreamFrame:
-    """One model frame for one stream: exactly `Engine.frame_samples` float32 samples."""
-
-    stream_id: int
-    samples: np.ndarray
-    is_first: bool
-    is_last: bool
-    length: int  # valid samples; the rest is zero padding (only on the last frame)
-
-
-@dataclass(frozen=True)
-class StepResult:
-    stream_id: int
-    partial: str  # text since the last end of utterance, still subject to change
-    final: str  # text finalised in this step ("" if none)
-    final_start: float | None  # seconds from the stream's start
-    final_end: float | None
 
 
 class Engine:

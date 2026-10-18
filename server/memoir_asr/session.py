@@ -1,11 +1,16 @@
 """One meeting on one WebSocket: turns network audio into model frames and model output into messages."""
 
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from .engine import StepResult, StreamFrame
+from .frames import StepResult, StreamFrame
 from .protocol import SAMPLE_RATE
+
+# The model often emits a sentence's closing punctuation one step after its end-of-utterance cut,
+# so it shows up at the start of the next segment ("? Alice will …"). It belongs to the previous final.
+LEADING_PUNCT = re.compile(r"^[\s.,!?;:…]+")
 
 
 @dataclass
@@ -20,6 +25,7 @@ class Source:
     seg: int = 0
     partial: str = ""
     last_final_end: float = 0.0
+    last_final: dict | None = None  # the previous final message, which late punctuation may amend
 
 
 class Session:
@@ -66,25 +72,26 @@ class Session:
         return frames
 
     def handle(self, results: list[StepResult]) -> list[dict]:
-        """Model output → `final` / `partial` messages, in that order per source."""
+        """Model output → `final` / `partial` messages, in that order per source.
+
+        A `final` re-sent with an earlier `seg` replaces that segment (late punctuation moved back).
+        """
         messages = []
         for r in results:
             src = self._by_stream.get(r.stream_id)
             if src is None:
                 continue
             upto = round(src.fed / SAMPLE_RATE, 3)
-            if r.final:
+            final = self._carry_punctuation(src, r.final, upto, messages)
+            if final:
                 t0 = r.final_start if r.final_start is not None else src.last_final_end
                 t1 = r.final_end if r.final_end is not None else upto
-                messages.append({"type": "final", "source": src.name, "seg": src.seg,
-                                 "t0": round(t0, 2), "t1": round(t1, 2), "text": r.final, "upto": upto})
-                src.seg += 1
-                src.last_final_end = t1
-                src.partial = ""
-            if r.partial != src.partial:
-                src.partial = r.partial
+                self._emit_final(src, final, t0, t1, upto, messages)
+            partial = self._carry_punctuation(src, r.partial, upto, messages)  # after this step's final
+            if r.final or partial != src.partial:
+                src.partial = partial
                 messages.append({"type": "partial", "source": src.name, "seg": src.seg,
-                                 "t0": round(src.last_final_end, 2), "text": r.partial, "upto": upto})
+                                 "t0": round(src.last_final_end, 2), "text": partial, "upto": upto})
         return messages
 
     def flush_partials(self) -> list[dict]:
@@ -93,11 +100,32 @@ class Session:
         for src in self.sources.values():
             if src.partial:
                 upto = round(src.fed / SAMPLE_RATE, 3)
-                messages.append({"type": "final", "source": src.name, "seg": src.seg,
-                                 "t0": round(src.last_final_end, 2), "t1": upto, "text": src.partial, "upto": upto})
-                src.seg += 1
+                self._emit_final(src, src.partial, src.last_final_end, upto, upto, messages)
                 src.partial = ""
         return messages
+
+    def _emit_final(self, src: Source, text: str, t0: float, t1: float, upto: float, messages: list) -> None:
+        msg = {"type": "final", "source": src.name, "seg": src.seg,
+               "t0": round(t0, 2), "t1": round(t1, 2), "text": text, "upto": upto}
+        messages.append(msg)
+        src.seg += 1
+        src.last_final_end = t1
+        src.last_final = msg
+        src.partial = ""
+
+    @staticmethod
+    def _carry_punctuation(src: Source, text: str, upto: float, messages: list) -> str:
+        """Strip leading punctuation; if the previous final lacks it, amend that final once."""
+        match = LEADING_PUNCT.match(text)
+        if not match:
+            return text
+        punct = match.group().strip()
+        prev = src.last_final
+        if punct and prev is not None and not prev["text"].endswith(punct):
+            prev = {**prev, "text": prev["text"].rstrip() + punct, "upto": upto}
+            src.last_final = prev
+            messages.append(prev)
+        return text[match.end():]
 
     def _frame(self, src: Source, pcm: bytes, is_last: bool) -> StreamFrame:
         valid = len(pcm) // 2
