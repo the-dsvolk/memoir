@@ -302,7 +302,13 @@ Problems hit while installing, and their fixes (newest last).
    binary needs the *responsible app* (the terminal, or the app itself) to have Local Network access;
    a background process that can't show the prompt is silently denied, and `URLSession` reports it as
    "offline". **Fix:** allow the app under Privacy & Security › Local Network and restart it. memoir
-   now says so instead of "offline".
+   now says so instead of "offline". For **Memoir.app**, macOS lists it under Local Network only once it
+   has asked, and the prompt can appear after the first failed attempt — so the app retries for ~20 s
+   ("waiting for network…"); after clicking **Allow** it connected (2026-10-18). **Fallback** if a
+   corporate filter blocks LAN access outright (this Mac also runs Cisco Secure Client's socket filter
+   and CrowdStrike): an SSH tunnel — `ssh -N -L 127.0.0.1:8770:127.0.0.1:8770 spark-0e81.local` — with
+   the server set to `ws://127.0.0.1:8770/v1/stream`; loopback isn't subject to Local Network privacy,
+   and the audio is encrypted on the way (tested: the tunnel reached the server).
 7. **Memoir.app crashed at launch — "Library not loaded: @rpath/Memoir.debug.dylib … different Team
    IDs"** (2026-10-18). Xcode 16+ splits Debug builds into a stub plus `Memoir.debug.dylib` (for SwiftUI
    previews); with hardened runtime, macOS only loads libraries signed by the app's Team ID, and a
