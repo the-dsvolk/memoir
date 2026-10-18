@@ -47,5 +47,8 @@ targets:
         CODE_SIGN_IDENTITY: "Memoire Dev"  # stable identity, so permission grants survive rebuilds
         DEVELOPMENT_TEAM: ""
         ENABLE_HARDENED_RUNTIME: YES
+        # One binary in Debug too: Xcode's split-out Memoir.debug.dylib (for SwiftUI previews) is
+        # refused at launch under hardened runtime — a self-signed identity has no Team ID (INSTALL.md #7).
+        ENABLE_DEBUG_DYLIB: NO
         ENABLE_APP_SANDBOX: NO
         GENERATE_INFOPLIST_FILE: NO

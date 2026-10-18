@@ -303,3 +303,8 @@ Problems hit while installing, and their fixes (newest last).
    a background process that can't show the prompt is silently denied, and `URLSession` reports it as
    "offline". **Fix:** allow the app under Privacy & Security › Local Network and restart it. memoir
    now says so instead of "offline".
+7. **Memoir.app crashed at launch — "Library not loaded: @rpath/Memoir.debug.dylib … different Team
+   IDs"** (2026-10-18). Xcode 16+ splits Debug builds into a stub plus `Memoir.debug.dylib` (for SwiftUI
+   previews); with hardened runtime, macOS only loads libraries signed by the app's Team ID, and a
+   self-signed "Memoire Dev" identity has none. **Fix:** `ENABLE_DEBUG_DYLIB: NO` in `project.yml` —
+   one binary, nothing to validate (better than turning library validation off).
