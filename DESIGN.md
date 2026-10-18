@@ -226,8 +226,11 @@ succeeds but buffers are all zeros. So: a **silence watchdog** — if the call a
 - **No timestamps from the stream itself** in v1; segment times come from sample counts (§5.3). RNN-T
   token timestamps (NeMo) or Riva's word offsets are a later add-on. **No custom vocabulary** in v1 —
   the model card doesn't offer it; NeMo's word boosting for transducers is a later experiment.
-- **Memory:** ~1.2 GB of weights in bf16 (the F32 checkpoint is 2.4 GB) — a few GB in all, next to
-  qmx's ~39 GB on the same unified memory. No vLLM-style up-front reservation to cap.
+- **Memory:** measured **4.99 GB peak** on `spark-0e81` with the F32 weights (2.4 GB; bf16 would halve
+  them) — next to qmx's ~39 GB on the same unified memory. No vLLM-style up-front reservation to cap.
+  Installed and verified 2026-10-17 — see [`INSTALL.md`](./INSTALL.md).
+- **Numbers come out as words** ("forty two thousand dollars") — no inverse text normalisation (ITN).
+  NeMo's streaming pipeline config (`cache_aware_rnnt.yaml`) adds ITN; open question 10.
 - **M0 comparison:** `nvidia/parakeet-unified-en-0.6b` (revision `fe53cd8`, 2026-04-07) — same family
   and NeMo stack, one model for streaming *and* offline. Better WER from 0.24 s to 2.08 s (560 ms: 6.52
   vs 7.09 in its card; offline 5.91) but *buffered* streaming (recomputes left context every chunk —
@@ -422,6 +425,8 @@ MEMOIR_MODEL=nvidia/nemotron-speech-streaming-en-0.6b
 MEMOIR_MODEL_REVISION=ebe59e5a817142986528bbbee5dba8db7b38ed50
 MEMOIR_CHUNK_MS=560                # att_context_size [70, 6]; 1120 = [70, 13]
 MEMOIR_DATA_DIR=/home/dsvolk/.memoir
+HF_HOME=/home/dsvolk/.cache/memoir/huggingface   # ~/.cache/huggingface/hub is root-owned (INSTALL.md #2)
+WANDB_MODE=disabled
 MEMOIR_SAVE_AUDIO=false
 MEMOIR_OLLAMA_URL=http://localhost:11434
 MEMOIR_NOTES_MODEL=qwen3.6:35b-a3b
@@ -442,7 +447,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/GitHub/the-dsvolk/memoir/server
 EnvironmentFile=%h/.config/memoir/env
-ExecStart=%h/.local/bin/uv run --project %h/GitHub/the-dsvolk/memoir/server python -m memoir_asr
+ExecStart=%h/.local/bin/uv run --no-sync --project %h/GitHub/the-dsvolk/memoir/server python -m memoir_asr
 Restart=on-failure
 RestartSec=5
 
@@ -541,6 +546,8 @@ answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling re
    classifier? And query the Spark's shared qmx index (current plan) or the Mac's personal one?
 9. **qmx indexing while its server runs** — confirm `qmx index` is safe alongside the resident
    `qmx-mcp` on the same `index.db`.
+10. **Numbers as digits?** The model writes "forty two thousand dollars". Add ITN (NeMo's streaming
+    pipeline has it) for finals only, both partials and finals, or neither?
 
 ## Appendix A — changes from the first blueprint
 
