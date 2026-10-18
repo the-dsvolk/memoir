@@ -69,3 +69,14 @@ import Testing
     #expect(t.handle(.init(type: "final", seg: 1, text: "Sure.", t0: 65)) == [.live("Sure.")])
     #expect(t.finish() == [.line("[01:05] Sure.")])
 }
+
+@Test func liveTranscriptLabelsSourcesAndKeepsOrder() {
+    var t = LiveTranscript(labelled: true)
+    #expect(t.handle(.init(type: "final", source: "them", seg: 0, text: "Hi all", t0: 1)) == [.live("Them: Hi all")])
+    // The other side starts talking: Them's held sentence is committed first, then Me goes live.
+    #expect(t.handle(.init(type: "partial", source: "me", seg: 0, text: "hello"))
+        == [.line("[00:01] Them: Hi all"), .live("Me: hello")])
+    #expect(t.handle(.init(type: "final", source: "them", seg: 0, text: "Hi all.")) == [])  // too late, ignored
+    #expect(t.handle(.init(type: "final", source: "me", seg: 0, text: "Hello.", t0: 3)) == [.live("Me: Hello.")])
+    #expect(t.finish() == [.line("[00:03] Me: Hello.")])
+}

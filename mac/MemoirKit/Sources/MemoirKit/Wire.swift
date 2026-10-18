@@ -68,8 +68,9 @@ public struct ServerMessage: Decodable, Sendable, Equatable {
     public var code: String?
     public var message: String?
 
-    public init(type: String, seg: Int? = nil, text: String? = nil, t0: Double? = nil) {
+    public init(type: String, source: String? = nil, seg: Int? = nil, text: String? = nil, t0: Double? = nil) {
         self.type = type
+        self.source = source
         self.seg = seg
         self.text = text
         self.t0 = t0

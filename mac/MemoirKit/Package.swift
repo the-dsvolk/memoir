@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MemoirKit",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("14.4")],  // Core Audio process taps need 14.2+
     products: [
         .library(name: "MemoirKit", targets: ["MemoirKit"]),
         .executable(name: "memoir", targets: ["memoir"]),

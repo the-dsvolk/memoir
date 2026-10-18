@@ -6,6 +6,7 @@ public enum MemoirError: Error, CustomStringConvertible {
     case microphoneDenied
     case server(code: String, message: String)
     case unexpectedMessage
+    case coreAudio(what: String, status: OSStatus)
 
     public var description: String {
         switch self {
@@ -14,6 +15,7 @@ public enum MemoirError: Error, CustomStringConvertible {
         case .microphoneDenied: "microphone access denied — allow it for your terminal app in System Settings › Privacy & Security › Microphone"
         case .server(let code, let message): "server error \(code): \(message)"
         case .unexpectedMessage: "unexpected message from the server"
+        case .coreAudio(let what, let status): "Core Audio couldn't \(what) (OSStatus \(status))"
         }
     }
 }

@@ -159,16 +159,28 @@ scp spark-0e81.local:.config/memoir/token ~/.config/memoir/token && chmod 600 ~/
 ### 3. Listen
 
 ```bash
-.build/release/memoir listen                      # microphone; Ctrl-C to stop
-.build/release/memoir listen --save me.wav        # also keep the audio (16 kHz mono)
-.build/release/memoir listen --input meeting.wav  # stream a file in real time instead
+.build/release/memoir listen                       # microphone; Ctrl-C to stop
+.build/release/memoir listen --source system       # what the Mac plays (YouTube, a call, …) as "Them"
+.build/release/memoir listen --source mic+system   # both, labelled Me: / Them: — use headphones
+.build/release/memoir listen --save me.wav         # also keep the audio (16 kHz mono; mic+system → me-me.wav, me-them.wav)
+.build/release/memoir listen --input meeting.wav   # stream a file in real time instead
 ```
 
 Partial text updates in place (dim, on stderr); finished sentences print to stdout as
-`[mm:ss] text`, so `memoir listen > transcript.txt` keeps just the transcript. On the first run macOS
-asks for **microphone access for your terminal app** (Terminal, iTerm, …) — allow it under
-Privacy & Security › Microphone. Default server: `ws://spark-0e81.local:8770/v1/stream`
-(`--server` to change).
+`[mm:ss] text` (with two sources `[mm:ss] Me: …` / `[mm:ss] Them: …`), so
+`memoir listen > transcript.txt` keeps just the transcript. Default server:
+`ws://spark-0e81.local:8770/v1/stream` (`--server` to change).
+
+Permissions, asked on first use **for your terminal app** (Terminal, iTerm, …):
+- **Microphone** (`mic`) — Privacy & Security › Microphone.
+- **System Audio Recording** (`system`) — Privacy & Security › Screen & System Audio Recording ›
+  *System Audio Recording Only*. There's no API to check it: when it's denied the tap just delivers
+  silence, so `memoir` prints a hint after 5 s of silence. A grant only takes effect after the terminal
+  app restarts.
+
+`--source system` taps **everything the Mac plays** except memoir itself (a Core Audio process tap,
+macOS 14.4+), before the speakers — speakers or headphones don't matter, and notification sounds come
+along too. Tapping a single app (Zoom, Teams, a browser) comes with M2.
 
 ## Privacy
 
