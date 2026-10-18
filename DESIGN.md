@@ -26,7 +26,7 @@ DGX Spark `spark-0e81` on the home LAN — the same split qmx uses.
 
 **Non-goals (v1)** — any language other than **English** (decided), translation, full meeting
 summaries / action items (only my own notes get expanded), telling apart *multiple* remote or in-room
-speakers, more than one client or one meeting at a time, any cloud service, and use away from the
+speakers (planned after v1 with D11), more than one client or one meeting at a time, any cloud service, and use away from the
 home LAN (no on-device fallback — decided).
 
 ## 2. Settled decisions
@@ -43,6 +43,7 @@ home LAN (no on-device fallback — decided).
 | D8 | **Quick notes typed on the Mac, expanded on the Spark** by `qwen3.6:35b-a3b`, the model qmx already serves via Ollama | No notes, or a new model | The transcript alone is the least useful part; notes are where the value is, and the model is already loaded. |
 | D9 | **Live assist = qmx retrieval** over its MCP endpoint, with meetings indexed into qmx | A separate RAG stack | qmx already runs embeddings, a reranker and the index on the same Spark. |
 | D10 | **English only** — ASR language fixed to English, no auto-detect | Auto-detect / per-meeting language | No language-ID flips on short chunks; English prompts and question heuristics; English-only ASR models become candidates. |
+| D11 | **Speaker diarization (for now): `nvidia/diar_streaming_sortformer_4spk-v2.1`** — streaming, on the Them / Room audio, next to Nemotron; words assigned to speakers by time ("Them 1", "Them 2") | Multitalker Parakeet (one ASR per speaker); per-sentence embeddings + clustering | NeMo-native, 117M, up to 4 speakers, ~1 s latency, DER 6.7 % (2-speaker calls) to 16.7 % (AMI) at its low-latency setting; NVIDIA Open Model License. Not implemented yet. |
 
 ## 3. Architecture
 
@@ -546,8 +547,9 @@ permission on the managed Mac, so the CLI needs no app bundle. Not yet: tapping 
 Teams / browser), the overlay app, notes, assist, resume. Run it: [`INSTALL.md`](./INSTALL.md).
 
 **Later:** full summaries / action items; expanding a note live, during the meeting; LLM-composed
-answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling remote speakers apart;
-`spark-0f50` fail-over; ScreenCaptureKit as a capture fallback.
+answers in hints by default; word timestamps (the pipeline's word-level output); speaker diarization
+with Sortformer (D11), then naming speakers; `spark-0f50` fail-over; ScreenCaptureKit as a capture
+fallback.
 
 ## 13. Open questions
 
@@ -615,6 +617,7 @@ Gemma 4). Compared on 2026-10-17:
   https://github.com/NVIDIA-NeMo/NeMo/blob/main/examples/asr/conf/asr_streaming_inference/cache_aware_rnnt.yaml
 - M0 comparison — https://huggingface.co/nvidia/parakeet-unified-en-0.6b · multilingual sibling (not
   used) https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b
+- Speaker diarization (D11) — https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1
 - Spark — driver / CUDA ceiling https://forums.developer.nvidia.com/t/379168 · GB10 container recipe
   https://github.com/cjlapao/qwen3-audio-gb10
 - Considered and replaced — Qwen3-ASR https://github.com/QwenLM/Qwen3-ASR · its DGX Spark port
