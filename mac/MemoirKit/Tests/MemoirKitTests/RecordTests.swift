@@ -25,7 +25,7 @@ private let oct18 = DateComponents(calendar: .current, year: 2026, month: 10, da
 @Test func storeWritesTheCallFolder() throws {
     let dir = try tempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let store = try MeetingStore(saveDir: dir, name: "Weekly Sync", context: "agenda: Q4",
+    let store = try MeetingStore(saveDir: dir, name: "Weekly Sync", prep: "Attendees: Alice, Bob\nagenda: Q4",
                                  sources: [.me, .them], client: "test", startedAt: oct18)
     #expect(store.folder.lastPathComponent == "2026-10-18_weekly-sync")
     let perms = try FileManager.default.attributesOfItem(atPath: store.folder.path)[.posixPermissions] as? Int
@@ -36,13 +36,19 @@ private let oct18 = DateComponents(calendar: .current, year: 2026, month: 10, da
     try store.record(final: .init(type: "final", source: "them", seg: 0, text: "Hi all.", t0: 1))  // amended
     try store.addQuickNote(at: 65, "ask about budget")
     try store.addQuickNote(at: 70, "follow up:\nAlice owns the vendor\n")
+    try store.addPrep(at: 754, "Carol joined (finance).")
     try store.finish(serverPath: "meetings/x.jsonl")
-    #expect(try read(store.folder, "notes.md").hasSuffix("- [01:10] follow up:\n  Alice owns the vendor\n"))
 
     #expect(try read(store.folder, "transcript.txt") == "[00:01] Them: Hi all.\n[00:03] Me: Hello.\n")
     #expect(try read(store.folder, "transcript.jsonl").split(separator: "\n").count == 3)
     let notes = try read(store.folder, "notes.md")
-    #expect(notes.contains("# Weekly Sync") && notes.contains("agenda: Q4") && notes.contains("- [01:05] ask about budget"))
+    #expect(notes.hasPrefix("# Notes — Weekly Sync") && notes.contains("- [01:05] ask about budget"))
+    #expect(notes.hasSuffix("- [01:10] follow up:\n  Alice owns the vendor\n"))
+    #expect(!notes.contains("agenda"))  // prep lives in prep.md
+    let prep = try read(store.folder, "prep.md")
+    #expect(prep.hasPrefix("# Prep — Weekly Sync"))
+    #expect(prep.contains("## Before the call\n\nAttendees: Alice, Bob\nagenda: Q4\n"))
+    #expect(prep.hasSuffix("## Added during the call\n\n### 12:34\n\nCarol joined (finance).\n"))
     let meeting = try JSONSerialization.jsonObject(with: Data(try read(store.folder, "meeting.json").utf8)) as? [String: Any]
     #expect(meeting?["name"] as? String == "Weekly Sync")
     #expect(meeting?["sources"] as? [String] == ["me", "them"])
@@ -63,7 +69,8 @@ private let oct18 = DateComponents(calendar: .current, year: 2026, month: 10, da
     try second.record(final: .init(type: "final", source: "me", seg: 1, text: "After rename.", t0: 5))  // open file follows
     try second.finish(serverPath: nil)
     #expect(try read(second.folder, "transcript.jsonl").split(separator: "\n").count == 2)
-    #expect(try read(second.folder, "notes.md").hasPrefix("# Planning"))
+    #expect(try read(second.folder, "notes.md").hasPrefix("# Notes — Planning"))
+    #expect(try read(second.folder, "prep.md").hasPrefix("# Prep — Planning"))
 
     try second.rename(to: "Planning")  // same name: stays put
     #expect(second.folder.lastPathComponent == "2026-10-18_planning")

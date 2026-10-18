@@ -165,14 +165,15 @@ scp spark-0e81.local:.config/memoir/token ~/.config/memoir/token && chmod 600 ~/
 .build/release/memoir listen --name "Weekly sync"            # microphone; Ctrl-C to stop
 .build/release/memoir listen --source system                 # what the Mac plays (YouTube, a call, …) as "Them"
 .build/release/memoir listen --source mic+system \
-    --name "Weekly sync" --notes "agenda: Q4 plan"           # both, labelled Me: / Them: — use headphones
+    --name "Weekly sync" --prep "Attendees: Alice, Bob"      # both, labelled Me: / Them: — use headphones
+.build/release/memoir listen --prep-file agenda.md           # prep from a file (attendees, agenda, docs…)
 .build/release/memoir listen --save-audio                    # also keep the audio, one WAV per source
 .build/release/memoir listen --input meeting.wav --no-record # stream a file in real time, no call folder
 ```
 
 Every call is recorded in its own folder — `~/memoir/2026-10-18_weekly-sync/` with `transcript.txt`,
-`transcript.jsonl`, `notes.md`, `meeting.json` (and `me.wav` / `them.wav` with `--save-audio`) —
-written as the call goes (DESIGN.md §4.7). A name already used that day gets `_2`. `--out DIR`
+`transcript.jsonl`, `prep.md` (material for the call), `notes.md` (notes during it), `meeting.json`
+(and `me.wav` / `them.wav` with `--save-audio`) — written as the call goes (DESIGN.md §4.7). A name already used that day gets `_2`. `--out DIR`
 changes the save folder for one run; the default comes from `~/.config/memoir/config.toml` (shared with
 the app):
 
@@ -222,14 +223,18 @@ The app lives in the **menu bar** (a waveform icon; a red dot while recording) �
 ### 3. Use it
 
 - **New Call…** (⌘N in the menu): the call's **name**, what to **listen to** (microphone + this Mac's
-  audio for calls, microphone only in person, or the Mac's audio only) and optional **notes**
-  (attendees, agenda, links). The window shows the folder it will save to. **Start**.
+  audio for calls, microphone only in person, or the Mac's audio only) and **prep** — attendees,
+  agenda, past notes, docs; the editor grows with the window. It shows the folder it will save to.
+  **Start**.
 - The **overlay** floats above full-screen apps: status (`connecting…` / `live` / `saving…` /
   `error`), the call's name (edit it and press Enter to rename — the folder follows), the elapsed time,
-  the live transcript (grey while still changing), and a **quick note** field (Enter adds a note
-  stamped with the meeting time). **Stop** ends the call; the overlay then shows where it was saved.
-- **Settings…** (⌘,): save folder, save audio, server — written to `~/.config/memoir/config.toml`,
-  which the CLI reads too.
+  the live transcript (grey while still changing), and on the right a **Notes | Prep** pane with a
+  multi-line editor (⌘↩ adds; an entry is stamped with the meeting time when you start typing):
+  **Notes** for your notes during the call (`notes.md`), **Prep** to add material as the call goes —
+  someone joined, a doc was pasted — appended with its time to `prep.md`. **Stop** ends the call; the
+  overlay then shows where it was saved.
+- **Settings…** (⌘,): the font and size for transcript and notes; save folder, save audio, server —
+  the last three written to `~/.config/memoir/config.toml`, which the CLI reads too.
 
 On first use macOS asks **for Memoir itself** (separately from your terminal): **Microphone**,
 **System Audio Recording** (Privacy & Security › Screen & System Audio Recording › *System Audio

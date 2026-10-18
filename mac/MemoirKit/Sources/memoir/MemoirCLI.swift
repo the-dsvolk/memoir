@@ -11,7 +11,8 @@ let usage = """
     options:
       --source SRC       mic (default), system (what the Mac plays: YouTube, calls, …), or mic+system
       --name TEXT        the call's name (folder name and title); default untitled-call-HHMM
-      --notes TEXT       context notes for the call (attendees, agenda, …) → notes.md
+      --prep TEXT        prep for the call (attendees, agenda, past notes, docs…) → prep.md
+      --prep-file PATH   prep read from a file (added after --prep)
       --out DIR          save folder (default from ~/.config/memoir/config.toml, else ~/memoir)
       --save-audio       also save the audio, one WAV per source, in the call's folder
       --no-record        don't write a call folder (quick tests)
@@ -27,7 +28,7 @@ let usage = """
 struct Options {
     var source = "mic"
     var name = ""
-    var notes = ""
+    var prep = ""
     var out: String?
     var saveAudio = false
     var record = true
@@ -60,7 +61,14 @@ struct Options {
                     throw UsageError(message: "--source must be mic, system or mic+system")
                 }
             case "--name", "--title": options.name = try value(flag)
-            case "--notes": options.notes = try value(flag)
+            case "--prep":
+                options.prep = [options.prep, try value(flag)].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            case "--prep-file":
+                let path = (try value(flag) as NSString).expandingTildeInPath
+                guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+                    throw UsageError(message: "can't read --prep-file \(path)")
+                }
+                options.prep = [options.prep, text].filter { !$0.isEmpty }.joined(separator: "\n\n")
             case "--out": options.out = try value(flag)
             case "--save-audio": options.saveAudio = true
             case "--no-record": options.record = false
@@ -139,11 +147,11 @@ struct MemoirCLI {
         let sources = options.sources
         let name = options.name.isEmpty ? (options.input?.deletingPathExtension().lastPathComponent ?? "") : options.name
         let store = options.record
-            ? try MeetingStore(saveDir: config.saveDirectory, name: name, context: options.notes, sources: sources,
+            ? try MeetingStore(saveDir: config.saveDirectory, name: name, prep: options.prep, sources: sources,
                                client: "memoir-cli", saveAudio: config.saveAudio)
             : nil
         let session = MeetingSession(options: SessionOptions(
-            server: server, token: try config.token(), sources: sources, name: name, context: options.notes,
+            server: server, token: try config.token(), sources: sources, name: name, prep: options.prep,
             input: options.input, app: "memoir-cli"))
         if let store, store.saveAudio {
             session.onAudio = { source, samples in try? store.record(audio: samples, from: source) }

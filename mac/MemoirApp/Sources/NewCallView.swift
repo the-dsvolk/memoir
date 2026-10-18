@@ -1,13 +1,13 @@
 import MemoirKit
 import SwiftUI
 
-/// "New Call…": name the call, choose what to listen to, add context notes, start (DESIGN.md §4.5, D13).
-/// The notes editor fills the window, so resizing the window gives more room to write.
+/// "New Call…": name the call, choose what to listen to, write prep for it, start (DESIGN.md §4.5, §4.7).
+/// The prep editor fills the window, so resizing the window gives more room to write.
 struct NewCallView: View {
     let model: AppModel
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var name = ""
-    @State private var context = ""
+    @State private var prep = ""
     @State private var source = "mic+system"
     @AppStorage(TextAppearance.fontKey) private var fontName = ""
     @AppStorage(TextAppearance.sizeKey) private var fontSize = TextAppearance.defaultSize
@@ -42,16 +42,16 @@ struct NewCallView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Notes").font(.headline)
-                TextEditor(text: $context)
+                Text("Prep").font(.headline)
+                TextEditor(text: $prep)
                     .font(TextAppearance.font(fontName, size: fontSize))
                     .scrollContentBackground(.hidden)
                     .padding(6)
                     .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
                     .overlay(alignment: .topLeading) {
-                        if context.isEmpty {
-                            Text("Optional: attendees, agenda, links…")
+                        if prep.isEmpty {
+                            Text("Attendees, agenda, past notes, docs — anything useful for this call")
                                 .font(TextAppearance.font(fontName, size: fontSize))
                                 .foregroundStyle(.tertiary)
                                 .padding(.horizontal, 11).padding(.vertical, 6)
@@ -79,7 +79,7 @@ struct NewCallView: View {
         .frame(minWidth: 520, idealWidth: 620, maxWidth: .infinity, minHeight: 420, idealHeight: 500, maxHeight: .infinity)
         .onAppear {
             name = ""
-            context = ""
+            prep = ""
             source = model.source
         }
     }
@@ -91,7 +91,7 @@ struct NewCallView: View {
 
     private func start() {
         dismissWindow(id: "new-call")
-        let (name, context, source) = (name, context, source)
-        Task { await model.start(name: name, context: context, source: source) }
+        let (name, prep, source) = (name, prep, source)
+        Task { await model.start(name: name, prep: prep, source: source) }
     }
 }

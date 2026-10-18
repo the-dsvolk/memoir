@@ -22,7 +22,7 @@ final class AppModel {
     var config = MemoirConfig.load()
     var transcript = TranscriptModel()
     var callName = ""
-    var context = ""
+    var prep = ""  // prep written before the call
     var source = UserDefaults.standard.string(forKey: "source") ?? "mic+system"
     var folder: URL?
     var startedAt: Date?
@@ -32,6 +32,7 @@ final class AppModel {
     var lastSummary = ""
     var overlayVisible = false
     var quickNotes: [QuickNote] = []
+    var prepAdditions: [QuickNote] = []  // prep added during the call (append-only, timestamped)
 
     /// The meeting clock (seconds since the server said ready), for note timestamps.
     var elapsed: Double { session?.elapsed ?? 0 }
@@ -50,14 +51,15 @@ final class AppModel {
         }
     }
 
-    func start(name: String, context: String, source: String) async {
+    func start(name: String, prep: String, source: String) async {
         guard !isRecording else { return }
         self.source = source
         UserDefaults.standard.set(source, forKey: "source")
         callName = name
-        self.context = context
+        self.prep = prep
         transcript.clear()
         quickNotes.removeAll()
+        prepAdditions.removeAll()
         silenceHint = false
         lastSummary = ""
         startedAt = nil
@@ -69,7 +71,7 @@ final class AppModel {
         do {
             guard let server = URL(string: config.server) else { throw AppError("bad server URL \(config.server)") }
             let token = try config.token()
-            let newStore = try MeetingStore(saveDir: config.saveDirectory, name: name, context: context,
+            let newStore = try MeetingStore(saveDir: config.saveDirectory, name: name, prep: prep,
                                             sources: sources, client: "memoir-app", saveAudio: config.saveAudio)
             store = newStore
             self.store = newStore
@@ -78,7 +80,7 @@ final class AppModel {
             for attempt in 1 ... Self.networkAttempts {
                 // A session is single-use, so each attempt gets a fresh one.
                 let session = MeetingSession(options: SessionOptions(
-                    server: server, token: token, sources: sources, name: name, context: context, app: "memoir-app"))
+                    server: server, token: token, sources: sources, name: name, prep: prep, app: "memoir-app"))
                 if newStore.saveAudio {
                     session.onAudio = { source, samples in try? newStore.record(audio: samples, from: source) }
                 }
@@ -111,7 +113,7 @@ final class AppModel {
 
     /// Starts the last call again (after a failure).
     func retry() async {
-        await start(name: callName, context: context, source: source)
+        await start(name: callName, prep: prep, source: source)
     }
 
     func stop() {
@@ -132,7 +134,7 @@ final class AppModel {
         try? store.rename(to: name)
         folder = store.folder
         let session = session
-        Task { try? await session?.sendMeta(title: name) }
+        Task { try? await session?.sendRename(to: name) }
     }
 
     /// Adds a quick note, stamped at `t` (when typing began) or now.
@@ -143,6 +145,16 @@ final class AppModel {
         try? store.addQuickNote(at: t, text)
         quickNotes.append(QuickNote(t: t, text: text))
         Task { try? await session.sendNote(id: "n\(Int(t * 1000))", at: t, text: text) }
+    }
+
+    /// Adds prep during the call (someone joined, a doc was pasted), stamped like a note.
+    func addPrep(_ text: String, at t: Double? = nil) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let session, let store else { return }
+        let t = t ?? session.elapsed
+        try? store.addPrep(at: t, text)
+        prepAdditions.append(QuickNote(t: t, text: text))
+        Task { try? await session.sendPrep(at: t, text: text) }
     }
 
     func showOverlay() {

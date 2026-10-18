@@ -95,9 +95,9 @@ struct OverlayView: View {
                 .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
 
-                if model.isRecording || !model.quickNotes.isEmpty {
+                if model.isRecording || !model.quickNotes.isEmpty || !model.prepAdditions.isEmpty {
                     Divider()
-                    NotesPane(model: model)  // grows with the overlay, within limits
+                    SidePane(model: model)  // grows with the overlay, within limits
                         .frame(minWidth: 240, idealWidth: 280, maxWidth: 380, maxHeight: .infinity)
                 }
             }
@@ -126,42 +126,64 @@ func meetingClock(_ seconds: TimeInterval) -> String {
                      : String(format: "%02d:%02d", s / 60, s % 60)
 }
 
-/// Notes on the right of the transcript: the notes added so far, and a multi-line editor. A note is
-/// stamped with the meeting time when you start typing it (you write after hearing the point).
-struct NotesPane: View {
+/// Right of the transcript: **Notes** (mine, during the call) and **Prep** (material for the call — the
+/// New Call prep plus anything added now, e.g. someone joined or a doc was pasted). One multi-line editor
+/// adds to the open tab; an entry is stamped with the meeting time when you start typing it. Prep added
+/// during the call is append-only (DESIGN.md §4.7).
+struct SidePane: View {
+    enum Tab: String, CaseIterable, Identifiable {
+        case notes = "Notes", prep = "Prep"
+        var id: Self { self }
+    }
+
     let model: AppModel
-    @State private var draft = ""
-    @State private var startedAt: Double?
+    @State private var tab: Tab = .notes
+    @State private var noteDraft = ""
+    @State private var noteStart: Double?
+    @State private var prepDraft = ""
+    @State private var prepStart: Double?
     @FocusState private var editing: Bool
     @AppStorage(TextAppearance.fontKey) private var fontName = ""
     @AppStorage(TextAppearance.sizeKey) private var fontSize = TextAppearance.defaultSize
 
     private var font: Font { TextAppearance.font(fontName, size: fontSize) }
+    private var entries: [AppModel.QuickNote] { tab == .notes ? model.quickNotes : model.prepAdditions }
+    private var draft: String { tab == .notes ? noteDraft : prepDraft }
+    private var started: Double? { tab == .notes ? noteStart : prepStart }
+    private var beforeCall: String { model.prep.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Notes").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Picker("Show", selection: $tab) {
+                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(model.quickNotes) { note in
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(meetingClock(note.t)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                                Text(note.text).font(font).textSelection(.enabled)
-                            }
-                            .id(note.id)
+                        if tab == .prep, !beforeCall.isEmpty {
+                            entry(caption: "Before the call", text: beforeCall)
+                        }
+                        ForEach(entries) { item in
+                            entry(caption: meetingClock(item.t), text: item.text).id(item.id)
+                        }
+                        if entries.isEmpty, tab == .notes || beforeCall.isEmpty {
+                            Text(tab == .notes ? "No notes yet" : "No prep yet").font(.caption).foregroundStyle(.tertiary)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .onChange(of: model.quickNotes.count) {
-                    if let last = model.quickNotes.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                .onChange(of: entries.count) {
+                    if let last = entries.last { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
             }
             .frame(maxHeight: .infinity)
 
             if model.isRecording {
-                TextEditor(text: $draft)
+                TextEditor(text: tab == .notes ? $noteDraft : $prepDraft)
                     .font(font)
                     .focused($editing)
                     .scrollContentBackground(.hidden)
@@ -170,18 +192,23 @@ struct NotesPane: View {
                     .background(Color(nsColor: .textBackgroundColor).opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
                     .overlay(alignment: .topLeading) {
                         if draft.isEmpty {
-                            Text("Type a note — ⌘↩ to add").font(font).foregroundStyle(.tertiary)
+                            Text(tab == .notes ? "Type a note — ⌘↩ to add" : "Add prep: someone joined, a doc… — ⌘↩")
+                                .font(font).foregroundStyle(.tertiary)
                                 .padding(.horizontal, 9).padding(.vertical, 4).allowsHitTesting(false)
                         }
                     }
-                    .onChange(of: draft) { old, new in
-                        if old.isEmpty, !new.isEmpty { startedAt = model.elapsed }
-                        if new.isEmpty { startedAt = nil }
+                    .onChange(of: noteDraft) { old, new in
+                        if old.isEmpty, !new.isEmpty { noteStart = model.elapsed }
+                        if new.isEmpty { noteStart = nil }
+                    }
+                    .onChange(of: prepDraft) { old, new in
+                        if old.isEmpty, !new.isEmpty { prepStart = model.elapsed }
+                        if new.isEmpty { prepStart = nil }
                     }
                 HStack {
-                    if let startedAt { Text("at \(meetingClock(startedAt))").font(.caption2).foregroundStyle(.secondary) }
+                    if let started { Text("at \(meetingClock(started))").font(.caption2).foregroundStyle(.secondary) }
                     Spacer()
-                    Button("Add Note") { add() }
+                    Button(tab == .notes ? "Add Note" : "Add Prep") { add() }
                         .keyboardShortcut(.return, modifiers: .command)
                         .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .controlSize(.small)
@@ -190,10 +217,24 @@ struct NotesPane: View {
         }
     }
 
+    private func entry(caption: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(caption).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            Text(text).font(font).textSelection(.enabled)
+        }
+    }
+
     private func add() {
-        model.addNote(draft, at: startedAt)
-        draft = ""
-        startedAt = nil
+        switch tab {
+        case .notes:
+            model.addNote(noteDraft, at: noteStart)
+            noteDraft = ""
+            noteStart = nil
+        case .prep:
+            model.addPrep(prepDraft, at: prepStart)
+            prepDraft = ""
+            prepStart = nil
+        }
         editing = true
     }
 }

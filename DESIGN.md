@@ -47,7 +47,7 @@ home LAN (no on-device fallback — decided).
 | D10 | **English only** — ASR language fixed to English, no auto-detect | Auto-detect / per-meeting language | No language-ID flips on short chunks; English prompts and question heuristics; English-only ASR models become candidates. |
 | D11 | **Speaker diarization (for now): `nvidia/diar_streaming_sortformer_4spk-v2.1`** — streaming, on the Them / Room audio, next to Nemotron; words assigned to speakers by time ("Them 1", "Them 2") | Multitalker Parakeet (one ASR per speaker); per-sentence embeddings + clustering | NeMo-native, 117M, up to 4 speakers, ~1 s latency, DER 6.7 % (2-speaker calls) to 16.7 % (AMI) at its low-latency setting; NVIDIA Open Model License. Not implemented yet. |
 | D12 | **The Mac folder is the record**: one folder per call, `<save folder>/YYYY-MM-DD_<call-name>/`, save folder `~/memoir` by default (set in the app); the Spark's JSONL is a **backup** | The Spark as source of truth | The transcript lives where I read and search it; the Spark copy still feeds qmx indexing and note expansion. |
-| D13 | **Named calls with notes; the CLI on par** — every call has a name and notes (free-text context + timestamped quick notes); the app and the CLI share one core (`MemoirKit`: `MeetingSession`, `TranscriptModel`, `MeetingStore`) and one config file | App-only features | Same folder layout and options from both; the CLI stays the tool for testing, recording and scripting. |
+| D13 | **Named calls with prep and notes; the CLI on par** — every call has a name, **prep** (material for the call — attendees, agenda, past notes, docs — written in New Call and appended to during the call with timestamps, `prep.md`) and **notes** (mine, during the call, `notes.md`); the app and the CLI share one core (`MemoirKit`: `MeetingSession`, `TranscriptModel`, `MeetingStore`) and one config file | App-only features | Same folder layout and options from both; the CLI stays the tool for testing, recording and scripting. |
 
 ## 3. Architecture
 
@@ -159,7 +159,8 @@ server-side filter: drop a Me final whose normalised text matches a Them final o
   colours.
 - **Status pill from real state:** `connecting` → `live` (only after the server's `ready`) →
   `reconnecting` / `offline`, plus `no system-audio permission` (§4.6) and `server error`.
-- **Menu bar:** **New call…** (asks for the call's name and optional context notes, then starts),
+- **Menu bar:** **New call…** (asks for the call's name and its **prep** — attendees, agenda, past
+  notes, docs — then starts; the overlay's **Notes | Prep** pane takes over during the call),
   stop, mode (call / in-person), call-app picker (auto = whichever is outputting), mic picker,
   click-through, open the save folder, Settings (save folder, save audio). The name can be edited until
   the call stops; its folder is renamed to match (§4.7).
@@ -194,7 +195,8 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
   2026-10-18_weekly-sync/         # <YYYY-MM-DD>_<call-name>, created at Start
     transcript.txt                # readable: [mm:ss] Me: … / Them: … — finals, corrections applied
     transcript.jsonl              # raw: every final as received (source, seg, t0, t1, text)
-    notes.md                      # context notes + quick notes with meeting times (+ expanded notes, M4)
+    prep.md                       # material for the call: before it, + timestamped additions during it
+    notes.md                      # my notes during the call, with meeting times (+ expanded notes, M4)
     meeting.json                  # name, start / end, sources, model, server, client (app or CLI)
     me.wav, them.wav              # only with "save audio" — off by default (~115 MB/hour per source)
 ```
@@ -207,11 +209,28 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
   to `transcript.jsonl` as it arrives (an amended final is appended again with the same `seg`; readers
   keep the last), and `transcript.txt` is regenerated from it — a crash loses nothing already said.
   Renaming the call before Stop renames the folder.
-- **Notes, both kinds** (open question 13): free-text **context** typed before, during or after the
-  call (attendees, agenda, links), and **quick notes** typed during it, each stamped with the meeting
-  time (§4.5). Both go to `notes.md` and to the server — context in `start` / `meta`, quick notes as
-  `note` messages — because note expansion needs them (§5.6). Expanded notes come back in
-  `notes_ready` and are added to `notes.md`.
+- **Prep and notes are separate files**, because post-processing uses them differently: **prep** is
+  grounding (names, spellings, facts, earlier decisions), **notes** are my points to expand and check
+  against the transcript (§5.6).
+  - **`prep.md`** — free text written in the New Call window ("Before the call"), then **append-only
+    during the call**: each addition (someone joined, a doc was pasted) goes under "Added during the
+    call" with the meeting time, so post-processing knows when the context changed:
+
+    ```markdown
+    # Prep — Weekly sync
+    ## Before the call
+    Attendees: Alice (PM), Bob (eng)
+    Agenda: Q4 plan, vendor budget
+    ## Added during the call
+    ### 12:34
+    Carol joined (finance).
+    ```
+  - **`notes.md`** — my notes during the call, `- [mm:ss] …`, a multi-line note kept as one item.
+  - Both entries are stamped when I *start typing* (I write after hearing the point). Both also go to
+    the server — prep in `start` and as `prep` messages, notes as `note` messages — for the Spark backup
+    and live features (name hints, D11 speaker naming). Expanded notes come back in `notes_ready` and
+    are added to `notes.md`. No structure is required in prep: "Attendees: …" is a convention a later
+    step can parse.
 - **Permissions:** folders `0700`, files `0600`. Keep the save folder out of iCloud-synced places
   (Desktop and Documents when iCloud Drive syncs them).
 - **One core, one config:** `MeetingStore` in `MemoirKit` writes the folder for both the app and the CLI.
@@ -224,8 +243,8 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
   ```
 
   The CLI follows the same file, with flags to override:
-  `memoir listen --name "Weekly sync" --notes "agenda: …" [--out DIR] [--save-audio]`
-  (replacing today's `--title` and `--save FILE.wav`).
+  `memoir listen --name "Weekly sync" --prep "agenda: …" [--prep-file agenda.md] [--out DIR] [--save-audio]`
+  (replacing today's `--title` and `--save FILE.wav`). The CLI takes prep before the call only.
 
 ## 5. Spark service — ASR, notes, assist (`spark-0e81`)
 
@@ -397,16 +416,17 @@ D12); this copy is the backup that qmx indexing (§5.7) and note expansion (§5.
 **Client → server, text frames**
 
 ```json
-{"type":"start","meeting_id":"3f9a…","title":"Weekly sync","context":"agenda: Q4 plan, budget",
+{"type":"start","meeting_id":"3f9a…","title":"Weekly sync","prep":"Attendees: Alice, Bob\nAgenda: Q4 plan",
  "app":"us.zoom.xos","sources":["me","them"],"sample_rate":16000,"encoding":"pcm_s16le"}
-{"type":"meta","title":"Weekly sync (Q4)","context":"agenda: Q4 plan, budget; Alice joined"}
+{"type":"meta","title":"Weekly sync (Q4)"}
+{"type":"prep","t":754.0,"text":"Carol joined (finance)."}
 {"type":"note","id":"n3","t":815.2,"text":"beta → Q1? ask re staffing"}
 {"type":"stop"}
 ```
 
-In-person mode sends `"sources":["room"]`. `title` is the call's name and `context` its free-text
-notes; `meta` updates either during the call. A note's `t` is the meeting clock when the hotkey was
-pressed.
+In-person mode sends `"sources":["room"]`. `title` is the call's name and `prep` the prep written
+before it; `meta` renames the call, `prep` appends prep during it (§4.7). A note's or prep's `t` is the
+meeting clock when typing began. The server keeps `note`, `prep` and `meta` in its backup JSONL.
 
 Reconnecting sends the same `start` (same `meeting_id`); the server continues the same file and segment
 numbering.
@@ -603,11 +623,12 @@ permission on the managed Mac, so the CLI needs no app bundle. Not yet: tapping 
 Teams / browser), the overlay app, notes, assist, resume. Run it: [`INSTALL.md`](./INSTALL.md).
 
 **App v0 (2026-10-18, branch `feat/app`):** the shared core in `MemoirKit` (`MeetingSession`,
-`MeetingStore`, `TranscriptModel`, `MemoirConfig`) with the CLI moved onto it (`--name`, `--notes`,
-`--out`, `--save-audio`), and `Memoir.app` (XcodeGen, `mac/MemoirApp/project.yml`): menu bar, New
-Call… (name, sources, notes), the overlay (status pill, editable name, timer, live transcript, quick
-notes), Settings writing the shared config, and the per-call folder of §4.7. Not yet: reconnect /
-resume, device-change handling, the quick-note hotkey, per-app taps, expanded notes.
+`MeetingStore`, `TranscriptModel`, `MemoirConfig`) with the CLI moved onto it (`--name`, `--prep`,
+`--prep-file`, `--out`, `--save-audio`), and `Memoir.app` (XcodeGen, `mac/MemoirApp/project.yml`):
+menu bar, New Call… (name, sources, prep), the overlay (status pill, editable name, timer, live
+transcript, a **Notes | Prep** pane with a multi-line editor), Settings (shared config; one font for
+transcript and notes), and the per-call folder of §4.7 with `prep.md` and `notes.md`. Not yet:
+reconnect / resume, device-change handling, the quick-note hotkey, per-app taps, expanded notes.
 
 **Later:** full summaries / action items; expanding a note live, during the meeting; LLM-composed
 answers in hints by default; word timestamps (the pipeline's word-level output); speaker diarization
@@ -636,8 +657,9 @@ fallback.
 12. **Names** (seen live: a first name misheard). NeMo's phrase boosting can bias towards a list of
     names; it runs a Triton kernel, which works now on uv's managed Python (INSTALL.md #4). Feed it
     from qmx or a per-meeting list?
-13. **Call-folder defaults to confirm** (§4.7) — a name already used that day gets `_2`; notes are both
-    free-text context and timestamped quick notes; saving audio is off.
+13. **Call-folder defaults to confirm** (§4.7) — a name already used that day gets `_2`; saving audio
+    is off. (Decided: prep in `prep.md`, written in New Call and append-only during the call; notes in
+    `notes.md` during the call only.)
 
 ## Appendix A — changes from the first blueprint
 

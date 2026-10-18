@@ -6,17 +6,17 @@ public struct SessionOptions: Sendable {
     public var token: String
     public var sources: [Source]
     public var name: String
-    public var context: String
+    public var prep: String  // prep written before the call
     public var input: URL?  // stream this file (as "me") in real time instead of capturing
     public var app: String  // client label stored by the server ("memoir-app", "memoir-cli")
 
-    public init(server: URL, token: String, sources: [Source], name: String, context: String = "",
+    public init(server: URL, token: String, sources: [Source], name: String, prep: String = "",
                 input: URL? = nil, app: String) {
         self.server = server
         self.token = token
         self.sources = sources
         self.name = name
-        self.context = context
+        self.prep = prep
         self.input = input
         self.app = app
     }
@@ -60,7 +60,7 @@ public final class MeetingSession: @unchecked Sendable {
         let (events, emit) = AsyncStream.makeStream(of: SessionEvent.self, bufferingPolicy: .unbounded)
         let meetingId = String(options.app.prefix(3)) + "-" + UUID().uuidString.prefix(6).lowercased()
         let ready = try await client.open(StartMessage(meetingId: meetingId, title: options.name,
-                                                       context: options.context, app: options.app,
+                                                       prep: options.prep, app: options.app,
                                                        sources: options.sources))
         lock.withLock { startedAt = ProcessInfo.processInfo.systemUptime }
         let chunkMs = ready.chunkMs ?? 560
@@ -123,8 +123,12 @@ public final class MeetingSession: @unchecked Sendable {
         try await client.send(NoteMessage(id: id, t: t, text: text))
     }
 
-    public func sendMeta(title: String? = nil, context: String? = nil) async throws {
-        try await client.send(MetaMessage(title: title, context: context))
+    public func sendRename(to title: String) async throws {
+        try await client.send(MetaMessage(title: title))
+    }
+
+    public func sendPrep(at t: Double, text: String) async throws {
+        try await client.send(PrepMessage(t: t, text: text))
     }
 
     // MARK: - Sending

@@ -1,13 +1,14 @@
 import Foundation
 
 /// The record of one call on the Mac (DESIGN.md §4.7, D12): `<save dir>/YYYY-MM-DD_<name>/` with
-/// `transcript.jsonl` (raw finals), `transcript.txt` (readable), `notes.md`, `meeting.json` and, if
-/// asked, one WAV per source. Created at start and written as the call goes, so a crash loses nothing
-/// already said. Thread-safe.
+/// `transcript.jsonl` (raw finals), `transcript.txt` (readable), `prep.md` (material brought to the
+/// call), `notes.md` (my notes during it), `meeting.json` and, if asked, one WAV per source. Created at
+/// start and written as the call goes, so a crash loses nothing already said. Thread-safe.
 public final class MeetingStore: @unchecked Sendable {
     public private(set) var folder: URL
     public private(set) var name: String
-    public private(set) var context: String
+    /// Prep written before the call (attendees, agenda, docs…).
+    public let prep: String
     public let startedAt: Date
     public let saveAudio: Bool
 
@@ -17,6 +18,7 @@ public final class MeetingStore: @unchecked Sendable {
     private let lock = NSLock()
     private var finals: [String: Final] = [:]
     private var quickNotes: [(t: Double, text: String)] = []
+    private var prepAdditions: [(t: Double, text: String)] = []
     private var jsonl: FileHandle?
     private var audio: [UInt8: WAVWriter] = [:]
     private var details: [String: Any] = [:]
@@ -28,13 +30,13 @@ public final class MeetingStore: @unchecked Sendable {
         let text: String
     }
 
-    public init(saveDir: URL, name: String, context: String = "", sources: [Source], client: String,
+    public init(saveDir: URL, name: String, prep: String = "", sources: [Source], client: String,
                 saveAudio: Bool = false, startedAt: Date = Date()) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: saveDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         self.saveDir = saveDir
         self.name = name
-        self.context = context
+        self.prep = prep
         self.sources = sources
         self.client = client
         self.saveAudio = saveAudio
@@ -53,6 +55,7 @@ public final class MeetingStore: @unchecked Sendable {
             }
         }
         try writeTranscript()
+        try writePrep()
         try writeNotes()
         try writeDetails()
     }
@@ -87,10 +90,12 @@ public final class MeetingStore: @unchecked Sendable {
         }
     }
 
-    public func setContext(_ text: String) throws {
+    /// Prep added during the call (someone joined, a doc was pasted): append-only, stamped with the
+    /// meeting clock so post-processing knows when the context changed.
+    public func addPrep(at t: Double, _ text: String) throws {
         try lock.withLock {
-            context = text
-            try writeNotes()
+            prepAdditions.append((t, text))
+            try writePrep()
         }
     }
 
@@ -103,6 +108,7 @@ public final class MeetingStore: @unchecked Sendable {
                 try FileManager.default.moveItem(at: folder, to: target)
                 folder = target
             }
+            try writePrep()
             try writeNotes()
             try writeDetails()
         }
@@ -135,7 +141,7 @@ public final class MeetingStore: @unchecked Sendable {
     @discardableResult
     public func discardIfEmpty() -> Bool {
         lock.withLock {
-            guard finals.isEmpty, quickNotes.isEmpty else { return false }
+            guard finals.isEmpty, quickNotes.isEmpty, prepAdditions.isEmpty else { return false }
             try? jsonl?.close()
             jsonl = nil
             for writer in audio.values { try? writer.close() }
@@ -152,11 +158,12 @@ public final class MeetingStore: @unchecked Sendable {
         try write("transcript.txt", lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n")
     }
 
+    /// `notes.md`: my notes during the call, each stamped with the meeting time.
     private func writeNotes() throws {
-        var text = "# \(name)\n\n_\(Self.humanDate(startedAt))_\n\n## Context\n\n"
-        text += context.isEmpty ? "_(none)_\n" : context.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
-        if !quickNotes.isEmpty {
-            text += "\n## During the call\n\n"
+        var text = "# Notes — \(name)\n\n_\(Self.humanDate(startedAt))_\n\n"
+        if quickNotes.isEmpty {
+            text += "_(none yet)_\n"
+        } else {
             // A multi-line note stays one list item: continuation lines are indented under the bullet.
             text += quickNotes.map { note in
                 "- [\(Self.clock(note.t))] "
@@ -165,6 +172,21 @@ public final class MeetingStore: @unchecked Sendable {
             }.joined(separator: "\n") + "\n"
         }
         try write("notes.md", text)
+    }
+
+    /// `prep.md`: what was brought to the call — written before it, then appended to during it.
+    private func writePrep() throws {
+        var text = "# Prep — \(name)\n\n_\(Self.humanDate(startedAt))_\n\n## Before the call\n\n"
+        let before = prep.trimmingCharacters(in: .whitespacesAndNewlines)
+        text += before.isEmpty ? "_(none)_\n" : before + "\n"
+        if !prepAdditions.isEmpty {
+            text += "\n## Added during the call\n"
+            for addition in prepAdditions {
+                text += "\n### \(Self.clock(addition.t))\n\n"
+                text += addition.text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+            }
+        }
+        try write("prep.md", text)
     }
 
     private func writeDetails() throws {
