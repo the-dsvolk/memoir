@@ -540,7 +540,10 @@ memoir/
 **MVP (2026-10-17, branch `feat/mvp-mic`):** the core of M1 plus a mic-only client — `memoir-asr`
 (WebSocket, NeMo streaming pipeline, partials / finals, late-punctuation fix, JSONL store, bearer
 token) and the Swift `memoir listen` command (Mac mic → 16 kHz → server, live transcript in the
-terminal). Not yet: the call tap, the overlay app, notes, assist, resume. Run it: [`INSTALL.md`](./INSTALL.md).
+terminal). Then `--source system` / `mic+system`: a global Core Audio process tap of everything the
+Mac plays, as "Them" — verified with a YouTube video; the terminal app got the System Audio Recording
+permission on the managed Mac, so the CLI needs no app bundle. Not yet: tapping one app (Zoom /
+Teams / browser), the overlay app, notes, assist, resume. Run it: [`INSTALL.md`](./INSTALL.md).
 
 **Later:** full summaries / action items; expanding a note live, during the meeting; LLM-composed
 answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling remote speakers apart;

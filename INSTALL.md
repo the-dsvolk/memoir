@@ -205,6 +205,7 @@ and transcripts stay on the LAN; the server needs the bearer token.
 | Latency (partials) | **0.02–0.03 s after a 560 ms chunk ends**, 0.56–0.62 s after it starts → a word shows up in ~0.3 s typically, ≤ 0.65 s worst |
 | Tests | 10 server tests (unittest), 6 Swift tests — all pass |
 | **Live microphone** (Yeti Stereo USB mic → `memoir listen` → server) | works first time; same latency (0.03 s after a chunk ends, 0.62 s after it starts); text right apart from a first name misheard and one sentence split at a mid-sentence pause |
+| **System audio** (`--source system`, a YouTube trailer playing in the browser) | works first time: the terminal app got System Audio Recording permission on this managed Mac — no app bundle needed; tap on the LG ULTRAWIDE output at 48 kHz stereo; same latency (0.03 s / 0.62 s). Clear lines transcribed well; fast cross-talk over music lost punctuation and merged into long segments |
 | Soak: 7.4 min in real time (30 × `meeting.wav`) | every repeat word-correct; the server kept pace — `upto` 446.4 s when stopped at 446 s, no backlog (stopped early to free the server for the live test) |
 
 Synthetic test audio (`say`) proves the pipeline; the live-mic run shows it works on a real voice.
