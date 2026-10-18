@@ -602,6 +602,13 @@ Mac plays, as "Them" — verified with a YouTube video; the terminal app got the
 permission on the managed Mac, so the CLI needs no app bundle. Not yet: tapping one app (Zoom /
 Teams / browser), the overlay app, notes, assist, resume. Run it: [`INSTALL.md`](./INSTALL.md).
 
+**App v0 (2026-10-18, branch `feat/app`):** the shared core in `MemoirKit` (`MeetingSession`,
+`MeetingStore`, `TranscriptModel`, `MemoirConfig`) with the CLI moved onto it (`--name`, `--notes`,
+`--out`, `--save-audio`), and `Memoir.app` (XcodeGen, `mac/MemoirApp/project.yml`): menu bar, New
+Call… (name, sources, notes), the overlay (status pill, editable name, timer, live transcript, quick
+notes), Settings writing the shared config, and the per-call folder of §4.7. Not yet: reconnect /
+resume, device-change handling, the quick-note hotkey, per-app taps, expanded notes.
+
 **Later:** full summaries / action items; expanding a note live, during the meeting; LLM-composed
 answers in hints by default; word timestamps (the pipeline's word-level output); speaker diarization
 with Sortformer (D11), then naming speakers; `spark-0f50` fail-over; ScreenCaptureKit as a capture

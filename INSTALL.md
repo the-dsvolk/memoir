@@ -1,15 +1,18 @@
 # memoir — Install
 
-How to install and run memoir's MVP:
+How to install and run memoir:
 - the **ASR server** `memoir-asr` on the DGX Spark `spark-0e81` — Nemotron Speech Streaming EN 0.6B
   on NeMo's streaming pipeline, in a rootless `uv` environment (Plan A in [`DESIGN.md`](./DESIGN.md)
-  §5.2), and
-- the **Mac command-line client** `memoir` — streams the microphone to the server and prints the live
-  transcript.
+  §5.2);
+- the **Mac command-line client** `memoir` — streams the mic and/or the Mac's audio to the server,
+  prints the live transcript and records each call in its own folder; and
+- the **Mac app** `Memoir.app` — the same, from the menu bar, with a floating transcript overlay.
 
-Everything runs as my user — **no sudo, no Docker**. The menu-bar app comes later (M3).
+Everything runs as my user — **no sudo, no Docker**. The CLI and the app share one core (`MemoirKit`)
+and one settings file (`~/.config/memoir/config.toml`).
 
-**Status:** server installed, MVP verified end to end on 2026-10-17 (see [Verified](#verified)).
+**Status:** server installed, MVP verified end to end on 2026-10-17; the app builds and signs
+(2026-10-18) — see [Verified](#verified).
 
 ## Requirements
 
@@ -146,7 +149,7 @@ cd ~/GitHub/the-dsvolk/memoir/server
 ```bash
 cd mac/MemoirKit
 swift build -c release            # → .build/release/memoir
-swift test                        # 6 tests
+swift test                        # 13 tests
 ```
 
 ### 2. Copy the token from the Spark
@@ -159,17 +162,29 @@ scp spark-0e81.local:.config/memoir/token ~/.config/memoir/token && chmod 600 ~/
 ### 3. Listen
 
 ```bash
-.build/release/memoir listen                       # microphone; Ctrl-C to stop
-.build/release/memoir listen --source system       # what the Mac plays (YouTube, a call, …) as "Them"
-.build/release/memoir listen --source mic+system   # both, labelled Me: / Them: — use headphones
-.build/release/memoir listen --save me.wav         # also keep the audio (16 kHz mono; mic+system → me-me.wav, me-them.wav)
-.build/release/memoir listen --input meeting.wav   # stream a file in real time instead
+.build/release/memoir listen --name "Weekly sync"            # microphone; Ctrl-C to stop
+.build/release/memoir listen --source system                 # what the Mac plays (YouTube, a call, …) as "Them"
+.build/release/memoir listen --source mic+system \
+    --name "Weekly sync" --notes "agenda: Q4 plan"           # both, labelled Me: / Them: — use headphones
+.build/release/memoir listen --save-audio                    # also keep the audio, one WAV per source
+.build/release/memoir listen --input meeting.wav --no-record # stream a file in real time, no call folder
+```
+
+Every call is recorded in its own folder — `~/memoir/2026-10-18_weekly-sync/` with `transcript.txt`,
+`transcript.jsonl`, `notes.md`, `meeting.json` (and `me.wav` / `them.wav` with `--save-audio`) —
+written as the call goes (DESIGN.md §4.7). A name already used that day gets `_2`. `--out DIR`
+changes the save folder for one run; the default comes from `~/.config/memoir/config.toml` (shared with
+the app):
+
+```toml
+save_dir   = "~/memoir"
+save_audio = false
+server     = "ws://spark-0e81.local:8770/v1/stream"
+token_file = "~/.config/memoir/token"
 ```
 
 Partial text updates in place (dim, on stderr); finished sentences print to stdout as
-`[mm:ss] text` (with two sources `[mm:ss] Me: …` / `[mm:ss] Them: …`), so
-`memoir listen > transcript.txt` keeps just the transcript. Default server:
-`ws://spark-0e81.local:8770/v1/stream` (`--server` to change).
+`[mm:ss] text` (with two sources `[mm:ss] Me: …` / `[mm:ss] Them: …`).
 
 Permissions, asked on first use **for your terminal app** (Terminal, iTerm, …):
 - **Microphone** (`mic`) — Privacy & Security › Microphone.
@@ -181,6 +196,44 @@ Permissions, asked on first use **for your terminal app** (Terminal, iTerm, …)
 `--source system` taps **everything the Mac plays** except memoir itself (a Core Audio process tap,
 macOS 14.4+), before the speakers — speakers or headphones don't matter, and notification sounds come
 along too. Tapping a single app (Zoom, Teams, a browser) comes with M2.
+
+## Mac app (Memoir.app)
+
+### 1. Requirements
+
+- **Xcode 26** and **XcodeGen** (`brew install xcodegen`) — `mac/MemoirApp/project.yml` is the source;
+  the `.xcodeproj` is generated and not committed.
+- A **code-signing identity named "Memoire Dev"** in the login keychain — a stable identity keeps the
+  app's Microphone / System Audio Recording grants across rebuilds. To make one: Keychain Access ›
+  Certificate Assistant › Create a Certificate…, name `Memoire Dev`, *Self Signed Root*, *Code Signing*.
+- The token in `~/.config/memoir/token` (Mac client step 2).
+
+### 2. Build and run
+
+```bash
+cd mac/MemoirApp
+xcodegen generate
+xcodebuild -project Memoir.xcodeproj -scheme Memoir -configuration Debug -derivedDataPath build build
+open build/Build/Products/Debug/Memoir.app      # or copy it to /Applications first
+```
+
+The app lives in the **menu bar** (a waveform icon; a red dot while recording) — no Dock icon.
+
+### 3. Use it
+
+- **New Call…** (⌘N in the menu): the call's **name**, what to **listen to** (microphone + this Mac's
+  audio for calls, microphone only in person, or the Mac's audio only) and optional **notes**
+  (attendees, agenda, links). The window shows the folder it will save to. **Start**.
+- The **overlay** floats above full-screen apps: status (`connecting…` / `live` / `saving…` /
+  `error`), the call's name (edit it and press Enter to rename — the folder follows), the elapsed time,
+  the live transcript (grey while still changing), and a **quick note** field (Enter adds a note
+  stamped with the meeting time). **Stop** ends the call; the overlay then shows where it was saved.
+- **Settings…** (⌘,): save folder, save audio, server — written to `~/.config/memoir/config.toml`,
+  which the CLI reads too.
+
+On first use macOS asks **for Memoir itself** (separately from your terminal): **Microphone**,
+**System Audio Recording** (Privacy & Security › Screen & System Audio Recording › *System Audio
+Recording Only*; restart Memoir after granting) and **Local Network**.
 
 ## Privacy
 
@@ -207,6 +260,8 @@ and transcripts stay on the LAN; the server needs the bearer token.
 | **Live microphone** (Yeti Stereo USB mic → `memoir listen` → server) | works first time; same latency (0.03 s after a chunk ends, 0.62 s after it starts); text right apart from a first name misheard and one sentence split at a mid-sentence pause |
 | **System audio** (`--source system`, a YouTube trailer playing in the browser) | works first time: the terminal app got System Audio Recording permission on this managed Mac — no app bundle needed; tap on the LG ULTRAWIDE output at 48 kHz stereo; same latency (0.03 s / 0.62 s). Clear lines transcribed well; fast cross-talk over music lost punctuation and merged into long segments |
 | Soak: 7.4 min in real time (30 × `meeting.wav`) | every repeat word-correct; the server kept pace — `upto` 446.4 s when stopped at 446 s, no backlog (stopped early to free the server for the live test) |
+| **Memoir.app** (2026-10-18) | builds with XcodeGen + `xcodebuild`, no warnings; signed with "Memoire Dev", hardened runtime, `audio-input` entitlement; Info.plist carries the Microphone / System Audio / Local Network texts directly. **Not yet run on a real call.** |
+| Shared core + CLI (2026-10-18) | 13 Swift tests (call folder, `_2` on clashes, rename, config round-trip, transcript model, …) pass |
 
 Synthetic test audio (`say`) proves the pipeline; the live-mic run shows it works on a real voice.
 Accuracy on real calls (and the other side's audio) comes with the call tap (M2).
@@ -241,3 +296,10 @@ Problems hit while installing, and their fixes (newest last).
    pipeline skips a last frame with almost no audio. When the audio happened to divide evenly into
    560 ms frames, the last frame had 1 valid sample, so the period never came. **Fix:** the last frame
    always has ≥ 0.25 s of audio (silence counts) **and** some padding (`server/memoir_asr/session.py`).
+6. **"The Internet connection appears to be offline" while the LAN works** (2026-10-18). `memoir`
+   failed to connect (`NSURLErrorDomain -1009`) even by IP, while `ssh`, `curl` and `nc` reached the
+   Spark fine. Cause: macOS **Local Network privacy** — Apple's own tools are exempt, a third-party
+   binary needs the *responsible app* (the terminal, or the app itself) to have Local Network access;
+   a background process that can't show the prompt is silently denied, and `URLSession` reports it as
+   "offline". **Fix:** allow the app under Privacy & Security › Local Network and restart it. memoir
+   now says so instead of "offline".
