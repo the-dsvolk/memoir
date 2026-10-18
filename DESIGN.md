@@ -33,11 +33,11 @@ home LAN (no on-device fallback — decided).
 
 | # | Decision | Instead of | Why |
 |---|---|---|---|
-| D1 | **Inference on `spark-0e81` only** (for now) | `spark-0f50`, both | One host to operate; it already runs qmx. `spark-0f50` is the later fail-over. |
-| D2 | **Qwen3-ASR** (start with **1.7B**, fall back to 0.6B) | Qwen-Audio-Chat (~8B) | Dedicated ASR model, native streaming API, Apache-2.0, small enough for live latency. |
+| D1 | **Inference on `spark-0e81` only** | `spark-0f50`, both | One host to operate; it already runs qmx. `spark-0f50` was powered off on 2026-10-17 (its Nemotron-120B vLLM server had no traffic in 10 days); it's the later fail-over. |
+| D2 | **Nemotron Speech Streaming EN 0.6B** (`nvidia/nemotron-speech-streaming-en-0.6b`, pinned) | Qwen3-ASR-1.7B (earlier draft), Qwen-Audio-Chat (first blueprint) | True cache-aware streaming (each 80 ms frame processed once — no lag build-up), English-only like D10, 0.6B, tested on DGX Spark, NVIDIA Open Model License. |
 | D3 | **Core Audio process taps** for call audio | BlackHole + Multi-Output Device | No driver; volume keys keep working; follows the call app, not an output device. |
 | D4 | **Mic captured separately** → two streams, Me / Them | One mixed Aggregate Device | Speaker labels for free; lets us handle echo/bleed. |
-| D5 | **Server cuts speech into utterances (VAD)** and streams each one | Fixed 1.5 s windows | Qwen3-ASR streaming re-reads the whole utterance each chunk, so utterances must stay short. |
+| D5 | **One continuous stream per source; VAD only closes segments** | Fixed 1.5 s windows | The model streams natively (D2); VAD turns its running text into timed final segments. |
 | D6 | **Port 8770** on the Spark | 8000 | 8000 is vLLM's default; 8770 sits next to qmx's 8765 and is free. |
 | D7 | **In-person mode = mic only**, labelled **Room** | Call apps only | Same pipeline minus the tap; needs no system-audio permission. |
 | D8 | **Quick notes typed on the Mac, expanded on the Spark** by `qwen3.6:35b-a3b`, the model qmx already serves via Ollama | No notes, or a new model | The transcript alone is the least useful part; notes are where the value is, and the model is already loaded. |
@@ -47,15 +47,15 @@ home LAN (no on-device fallback — decided).
 ## 3. Architecture
 
 ```
- Mac — memoir.app (Swift)                          spark-0e81 — memoir-asr (Python, vLLM container)
+ Mac — memoir.app (Swift)                          spark-0e81 — memoir-asr (Python + NeMo, uv)
  ─────────────────────────                         ────────────────────────────────────────────────
  Zoom / Teams / WebEx output                        WebSocket :8770  (bearer token)
    └─ Core Audio process tap ──┐                      │
-                               ├─ resample → 16 kHz   ├─ per source: Silero VAD → utterances (≤ 20 s)
+                               ├─ resample → 16 kHz   ├─ per source: stream + Silero VAD (segment ends)
  Microphone (AVAudioEngine) ───┘   mono s16, 100 ms   │
    (in-person mode: mic only)      frames tagged      ├─ ASR worker (one thread, owns the model)
-                                   Me / Them / Room ► │    Qwen3-ASR-1.7B  streaming_transcribe()
- Quick note (hotkey) ────────────── note JSON ──────► │    → partial every ~1 s, final at end of speech
+                                   Me / Them / Room ► │    Nemotron Speech Streaming EN 0.6B (cache-aware)
+ Quick note (hotkey) ────────────── note JSON ──────► │    → partial every 0.56 s, final at end of speech
                                                       │
  Overlay HUD (NSPanel) ◄──── partial / final JSON ────┤
                        ◄──── assist hint ─────────────┼─ question? → qmx query (MCP :8765, same box)
@@ -71,7 +71,7 @@ home LAN (no on-device fallback — decided).
 | Mic capture | Mac | `AVAudioEngine` input node, `AVAudioConverter` |
 | Streaming client | Mac | `URLSessionWebSocketTask`, framing, reconnect + 30 s resend buffer |
 | UI | Mac | SwiftUI in an AppKit `NSPanel` overlay, `MenuBarExtra` |
-| ASR service | Spark | asyncio WebSocket server, Silero VAD, `qwen-asr` on vLLM, transcript store |
+| ASR service | Spark | asyncio WebSocket server, Nemotron Speech Streaming EN on NeMo, Silero VAD, transcript store |
 | Notes | Mac → Spark | hotkey note entry; expansion at stop via qmx's Ollama (`qwen3.6:35b-a3b`) |
 | Live assist | Spark | question detector on finals → qmx `query` → hint card in the overlay |
 
@@ -182,70 +182,103 @@ succeeds but buffers are all zeros. So: a **silence watchdog** — if the call a
 
 ### 5.1 Model and engine
 
-- **Qwen3-ASR-1.7B** via the official `qwen-asr` toolkit on its **vLLM backend** — streaming exists only
-  there. Weights: 1.7B ≈ 4.7 GB bf16, 0.6B ≈ 1.9 GB. Streaming WER (paper avg.): 1.7B 3.33 vs 0.6B 4.40.
-- The toolkit's streaming is **pseudo-streaming**: every call re-feeds all audio buffered so far for
-  that stream, with the last few tokens still revisable. Cost grows with utterance length and users
-  report lag building up on long streams — hence D5: one streaming state **per utterance**, reset after
-  each final, utterances capped at 20 s.
-- API shape (from the toolkit's example):
+- **Model: `nvidia/nemotron-speech-streaming-en-0.6b`**, pinned to revision `ebe59e5` (`main`, updated
+  2026-08-05 — the March 2026 checkpoint, which NVIDIA says outperforms the January one kept on branch
+  `nemotron-speech-streaming-jan2026`). NVIDIA Open Model License (commercial and non-commercial use).
+- **Why this one:** it's NVIDIA's latest **English** streaming ASR. The newest Nemotron ASR overall,
+  Nemotron 3.5 ASR Streaming 0.6B (2026-05-15, updated 2026-09-10), is the same design extended to 40
+  language-locales, and NVIDIA points English-only use at this model (D10).
+- **Architecture:** cache-aware FastConformer encoder (24 layers) + RNN-T decoder, 600M parameters,
+  punctuation and capitalisation built in, English only. **True streaming** — it caches attention and
+  convolution state, so every 80 ms frame is processed once: per-chunk cost is constant and lag can't
+  build up over a long call. Transducers are also far less prone than LLM decoders to invent text on
+  silence.
+- **Latency is a runtime setting**, `att_context_size = [70, R]` in 80 ms frames (no retraining).
+  Average WER on the Hugging Face Open ASR leaderboard sets (without punctuation, from the model card):
+
+  | R | Chunk | Avg WER | AMI (meetings) |
+  |---|---|---|---|
+  | 0 | 80 ms | 8.43 | 18.29 |
+  | 1 | 160 ms | 7.67 | 14.71 |
+  | **6** | **560 ms** | **7.07** | **11.88** |
+  | 13 | 1.12 s | 6.93 | 11.73 |
+
+  Default **560 ms**: within 0.14 points of the best setting, with partials twice a second. Meeting
+  audio (AMI) is the hardest set for every model — M0 measures on our own calls.
+- **API shape** — NeMo cache-aware streaming (argument names from NeMo's
+  `speech_to_text_cache_aware_streaming_infer.py`; exact return values confirmed in M0):
 
   ```python
-  asr = Qwen3ASRModel.LLM(model="Qwen/Qwen3-ASR-1.7B",
-                          gpu_memory_utilization=0.10, max_new_tokens=32)
-  state = asr.init_streaming_state(chunk_size_sec=1.0, unfixed_chunk_num=4,
-                                   unfixed_token_num=5, language="English")
-  asr.streaming_transcribe(new_audio, state)    # → state.text = whole current hypothesis (partial)
-  asr.finish_streaming_transcribe(state)        # → final text for the utterance
+  asr = nemo_asr.models.ASRModel.from_pretrained("nvidia/nemotron-speech-streaming-en-0.6b")
+  asr.encoder.set_default_att_context_size([70, 6])            # 560 ms chunks
+  caches = asr.encoder.get_initial_cache_state(batch_size=2)   # one row per source
+  # every 560 ms, mel features of the new chunk for each source →
+  out = asr.conformer_stream_step(processed_signal=feats, processed_signal_length=lens,
+                                  cache_last_channel=..., cache_last_time=...,
+                                  cache_last_channel_len=..., previous_hypotheses=hyps,
+                                  return_transcription=True)
+  # → updated caches + hypotheses; tokens added since the last step extend the partial
   ```
 
-  No timestamps and no batching in streaming mode; segment times come from sample counts (§5.3).
-  Word-level timestamps (Qwen3-ForcedAligner-0.6B on finals) are a later add-on.
-- **Memory cap is mandatory.** The Spark's 128 GB is unified CPU/GPU memory and qmx already holds
-  ~39 GB on the GPU (Ollama embeddings + the 23 GB `qwen3.6:35b-a3b` chat model + the llama.cpp
-  reranker). vLLM's default `gpu_memory_utilization` of 0.9 would starve it, so start at **0.10**
-  (~12 GB) and tune in M0.
-- **Language:** always `English` (D10) — no auto-detect, no per-meeting override. **Context biasing**
-  (`context=` names/jargon) is **off by default** — known issues: hotwords repeated in output, context
-  text leaking into transcripts.
+  Alternative: 🤗 Transformers ≥ 5.13 (`AutoModelForRNNT` + `processor.set_num_lookahead_tokens(6)`),
+  whose streaming example feeds `model.generate(..., streamer=TextIteratorStreamer)` from a generator of
+  per-chunk `input_features` — ours would block on the source's live audio queue (§5.2 Plan B).
+- **No timestamps from the stream itself** in v1; segment times come from sample counts (§5.3). RNN-T
+  token timestamps (NeMo) or Riva's word offsets are a later add-on. **No custom vocabulary** in v1 —
+  the model card doesn't offer it; NeMo's word boosting for transducers is a later experiment.
+- **Memory:** ~1.2 GB of weights in bf16 (the F32 checkpoint is 2.4 GB) — a few GB in all, next to
+  qmx's ~39 GB on the same unified memory. No vLLM-style up-front reservation to cap.
+- **M0 comparison:** `nvidia/parakeet-unified-en-0.6b` (revision `fe53cd8`, 2026-04-07) — same family
+  and NeMo stack, one model for streaming *and* offline. Better WER from 0.24 s to 2.08 s (560 ms: 6.52
+  vs 7.09 in its card; offline 5.91) but *buffered* streaming (recomputes left context every chunk —
+  irrelevant at two streams), minimum 160 ms, and NVIDIA recommends Nemotron for the lowest latencies.
+  Its offline mode is also the natural engine for a later post-meeting accuracy pass.
 
 ### 5.2 Install on the Spark (rootless) — proven in M0
 
-The upstream toolkit doesn't install as-is here: it pins `vllm==0.14.0` / `torch==2.9.1` (PyPI torch is
-CPU-only on aarch64) and the official Docker image is amd64-only. The Spark's driver (580.173.02)
-supports CUDA up to 13.1, so the newest usable NGC vLLM image is **26.02** (vLLM 0.15.1).
+Known good on `spark-0e81` (checked 2026-10-17): driver 580.173.02, deliberately pinned (CUDA 13.0
+builds work), and **torch 2.11.0+cu130 sees the GB10**. The model card lists DGX Spark among its test
+machines. Its NeMo install is `pip install Cython packaging` + `nemo_toolkit[asr]` from NeMo `main`,
+plus `apt-get install libsndfile1 ffmpeg`.
 
-- **Plan A — NGC container:** `FROM nvcr.io/nvidia/vllm:26.02-py3`, then
-  `pip install --no-deps qwen-asr==0.0.6` plus whatever it imports that the image lacks, plus
-  `silero-vad` and the web server. Pin the base image by digest. Docker already works for my user.
-- **Plan B — uv venv:** the community fork `qwen-asr-dgxspark` (torch ≥ 2.11, vLLM ≥ 0.20) with torch
-  from the `cu130` wheel index. Needs a check that its vLLM wheel runs on CUDA 13.1.
-- Skip `flash-attn` (fails to build for sm_121; the vLLM path doesn't need it).
+- **Plan A — uv venv + NeMo** (qmx-style, no Docker): Python 3.12, torch 2.11.0 from the `cu130` wheel
+  index (the build already working on this box), `nemo_toolkit[asr]` pinned to a NeMo commit,
+  `silero-vad`, the web server. There's no sudo for apt: `soundfile` wheels bundle libsndfile, and we
+  feed raw PCM, so ffmpeg shouldn't be needed — M0 confirms both.
+- **Plan B — uv venv + Transformers ≥ 5.13:** no NeMo at all (`AutoModelForRNNT`); lighter, newer code
+  path; streaming through the input-feature generator (§5.1), one `generate` thread per source instead
+  of batched steps.
+- **Plan C — container:** `FROM nvcr.io/nvidia/pytorch:25.10-py3` (CUDA 13.0; shown working on a GB10
+  by `cjlapao/qwen3-audio-gb10`), `apt-get install libsndfile1 ffmpeg` inside the image, NeMo installed
+  against a constraints file of the image's own `torch` / `torchaudio` / `nvidia-*` / `cuda-*` versions
+  (so pip can't swap in CPU-only torch), and a build step that fails if `import nemo.collections.asr`
+  fails. Runs with `--gpus all --network host --user %U`.
+- Keep memoir isolated from the `pip --user` torch / vLLM in `~/.local` (venvs ignore user
+  site-packages).
 
 ### 5.3 Per-stream pipeline
 
 For each `(meeting, source)`:
 
 1. **Ingest** frames into a ring buffer by `sample_offset`; fill gaps with silence, drop duplicates.
-2. **VAD** — Silero VAD on CPU, 32 ms frames. Utterance **starts** after 250 ms of speech (with 300 ms
-   pre-roll); **ends** after 600 ms of silence; **force-cut** at the first ≥ 200 ms pause after 15 s, or
-   hard at 20 s.
-3. **Partial** — whenever ≥ 1.0 s of new audio is buffered, feed it to `streaming_transcribe` and emit
-   `state.text` as a partial (skip if it didn't change).
-4. **Final** — at utterance end, `finish_streaming_transcribe` → emit final, append to the store,
-   discard the state.
-5. **Times** — `t0`/`t1` = sample offsets ÷ 16,000 (seconds since meeting start, per source clock).
+2. **Stream** — one continuous cache-aware stream per source for the whole meeting. Every 560 ms of
+   new audio becomes one stream step (§5.4); the tokens it adds extend the **open segment**, which is
+   sent as a partial. Silence is fed too: it keeps the encoder's context and costs almost nothing.
+3. **Segment ends** — Silero VAD (CPU, 32 ms frames) runs alongside. A segment **opens** at speech
+   start and **closes** after 600 ms of silence — by then the stream has emitted all its words — and its
+   text becomes a **final**, appended to the store. The decoder hypothesis is then reset; the encoder
+   caches are kept. Segments longer than 30 s close at the next ≥ 200 ms pause (readability, not cost).
+4. **Times** — `t0` / `t1` = VAD speech start / end as sample offsets ÷ 16,000 (seconds since meeting
+   start, per source clock). The model's input rate is read from its preprocessor at start-up and
+   asserted to be 16 kHz.
 
 ### 5.4 Concurrency
 
-- The vLLM engine is created in the main process (`if __name__ == "__main__"` — it spawns workers) and
-  used from **one dedicated ASR thread**; the asyncio WebSocket loop never touches the GPU and never
-  blocks.
-- At most one job in flight per stream. The scheduler runs **finals first**, then the stream with the
-  oldest pending audio. If a stream falls > 2 s behind, its partials are skipped (the audio still goes
-  into the next call) — partials degrade, finals are never dropped.
-- With one person talking at a time this is ~1 GPU call per second. Me and Them overlapping doubles it;
-  M0 measures whether that fits.
+- **One ASR thread owns the model**; the asyncio WebSocket loop never touches the GPU and never blocks.
+- Each 560 ms tick, the thread **batches** every source with a full chunk into one stream step (batch
+  1–2; caches are per row). NVIDIA reports ~2,400 parallel 1.12 s streams on one H100, so two streams
+  are a trivial load even on a GB10 — M0 records the per-step time.
+- No skip-partials logic: if a step ever runs late, chunks queue and `status` reports the lag.
 - v1 serves **one meeting at a time**; a second `start` with another `meeting_id` gets `busy`.
 
 ### 5.5 Storage
@@ -257,7 +290,7 @@ For each `(meeting, source)`:
 
 ```json
 {"type":"meeting","meeting_id":"3f9a…","title":"Weekly sync","app":"us.zoom.xos",
- "started_at":"2026-10-17T16:30:00-07:00","model":"Qwen/Qwen3-ASR-1.7B","language":"English"}
+ "started_at":"2026-10-17T16:30:00-07:00","model":"nvidia/nemotron-speech-streaming-en-0.6b@ebe59e5","chunk_ms":560}
 {"type":"final","source":"them","seg":42,"t0":812.48,"t1":817.90,"text":"So the plan for next quarter is to ship the beta."}
 {"type":"note","id":"n3","t":815.2,"text":"beta → Q1? ask re staffing"}
 {"type":"expanded_note","id":"n3","segs":[41,42,43],"text":"The beta ships next quarter (Q1); staffing for it is still open — follow up."}
@@ -286,7 +319,7 @@ source, for re-transcription and debugging). The Mac also saves a Markdown copy 
 ### 5.7 Live assist (M5)
 
 - **Trigger:** a **final** from Them or Room (not Me — I asked it) that looks like a question: it ends
-  in `?` (Qwen3-ASR punctuates) or starts with an interrogative (what / how / why / when / where / who
+  in `?` (the model punctuates) or starts with an interrogative (what / how / why / when / where / who
   / which / can / could / do / does / is / are / should / will), and has ≥ 5 words. An LLM classifier
   is the fallback if the heuristic proves too noisy.
 - **Lookup:** call qmx's `query` tool on its MCP endpoint (`http://localhost:8765/mcp`, same Spark)
@@ -331,7 +364,7 @@ numbering.
 **Server → client, text frames**
 
 ```json
-{"type":"ready","meeting_id":"3f9a…","model":"Qwen/Qwen3-ASR-1.7B","resume_from":{"me":0,"them":0}}
+{"type":"ready","meeting_id":"3f9a…","model":"nvidia/nemotron-speech-streaming-en-0.6b@ebe59e5","resume_from":{"me":0,"them":0}}
 {"type":"partial","source":"them","seg":42,"t0":812.48,"text":"so the plan for next quarter is"}
 {"type":"final","source":"them","seg":42,"t0":812.48,"t1":817.90,"text":"So the plan for next quarter is to ship the beta."}
 {"type":"status","lag_ms":{"me":120,"them":340}}
@@ -351,14 +384,13 @@ Partials carry the **whole** current text of the segment (not a delta), so the c
 | Tap / mic buffer | ~10–20 ms | aggregate buffer size + safety offset — measure |
 | Client framing (100 ms frames) | ≤ 100 ms (avg 50) | design |
 | LAN | < 5 ms | |
-| VAD frame | ≤ 32 ms | Silero frame size |
-| Wait for the next 1 s chunk | ≤ 1 s (avg 0.5 s) | `chunk_size_sec = 1.0` |
-| Decode one chunk | ~0.1–0.3 s | paper: ~0.1 s to first token on an unnamed GPU; **GB10 measured in M0** |
+| Wait for the 560 ms chunk to fill | ≤ 560 ms (avg 280) | `att_context_size = [70, 6]` — the model's whole look-ahead |
+| Stream step (both sources batched) | ~10–50 ms (estimate) | 0.6B model, two rows; **GB10 measured in M0** |
 | Render | ~16 ms | one frame |
 
-**Partial:** p50 ≈ 0.7–0.9 s, worst ≈ 1.5 s. **Final:** 600 ms end-of-speech silence + one decode ≈
-0.8–1.0 s after the speaker stops. Lowering `chunk_size_sec` to 0.5 s trades GPU calls for snappier
-partials. These are targets until M0/M1 put real numbers here.
+**Partial:** p50 ≈ 0.4–0.5 s, worst ≈ 0.8 s. **Final:** a segment closes after 600 ms of silence, so
+≈ 0.7 s after the speaker stops. 1.12 s chunks add ~0.3 s on average for ~0.1 points of WER. These are
+targets until M0/M1 put real numbers here.
 
 **Assist hint:** the question's final (≈ 1 s after it ends) + question check + qmx query (~0.1–0.5 s,
 to measure) → on screen ≤ 2 s after the question ends.
@@ -386,9 +418,10 @@ clone at `~/GitHub/the-dsvolk/memoir`.
 MEMOIR_HOST=0.0.0.0
 MEMOIR_PORT=8770
 MEMOIR_TOKEN=<openssl rand -hex 32>
-MEMOIR_MODEL=Qwen/Qwen3-ASR-1.7B
-MEMOIR_GPU_MEM_UTIL=0.10
-MEMOIR_DATA_DIR=/data              # ~/.memoir inside the container
+MEMOIR_MODEL=nvidia/nemotron-speech-streaming-en-0.6b
+MEMOIR_MODEL_REVISION=ebe59e5a817142986528bbbee5dba8db7b38ed50
+MEMOIR_CHUNK_MS=560                # att_context_size [70, 6]; 1120 = [70, 13]
+MEMOIR_DATA_DIR=/home/dsvolk/.memoir
 MEMOIR_SAVE_AUDIO=false
 MEMOIR_OLLAMA_URL=http://localhost:11434
 MEMOIR_NOTES_MODEL=qwen3.6:35b-a3b
@@ -401,17 +434,15 @@ MEMOIR_ASSIST=true
 
 ```ini
 [Unit]
-Description=memoir ASR server (Qwen3-ASR on vLLM)
-After=network-online.target
+Description=memoir ASR server (Nemotron Speech Streaming EN)
+After=network-online.target ollama.service
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/docker run --rm --name memoir-asr --gpus all --user %U \
-  --network host --env-file %h/.config/memoir/env \
-  -v %h/.memoir:/data -v %h/.cache/huggingface:/hf -e HF_HOME=/hf \
-  -v %h/GitHub/the-dsvolk/memoir/server:/app -w /app \
-  memoir-asr:local python -m memoir_asr
-ExecStop=/usr/bin/docker stop memoir-asr
+Type=simple
+WorkingDirectory=%h/GitHub/the-dsvolk/memoir/server
+EnvironmentFile=%h/.config/memoir/env
+ExecStart=%h/.local/bin/uv run --project %h/GitHub/the-dsvolk/memoir/server python -m memoir_asr
 Restart=on-failure
 RestartSec=5
 
@@ -419,8 +450,9 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-`--user` keeps files written to `/data` owned by me, not root; `--network host` lets the container reach
-Ollama and qmx on `localhost` and serve `:8770` directly.
+It runs on the host like qmx (Plans A/B), so Ollama (`localhost:11434`) and qmx (`localhost:8765`) are
+plain localhost calls and files under `~/.memoir` are owned by me. Plan C would run the same command
+inside the container with `--gpus all --network host --user %U`.
 
 M5 adds `memoir-index.path` (+ `.service`): `PathChanged=%h/.memoir/meetings/.last-stop` — a file the
 server touches after writing a meeting's Markdown — runs
@@ -443,13 +475,13 @@ memoir/
   DESIGN.md
   server/                 # Python — memoir-asr
     pyproject.toml
-    Dockerfile            # FROM nvcr.io/nvidia/vllm:26.02-py3 (pinned digest)
+    Dockerfile            # Plan C only (§5.2)
     memoir_asr/
       __main__.py         # builds the engine, starts the server
       protocol.py         # frame header, JSON messages
       session.py          # meeting + per-source state, resume
       vad.py              # Silero wrapper, utterance segmentation
-      engine.py           # ASR thread, scheduler, qwen-asr calls
+      engine.py           # ASR thread, batched NeMo stream steps
       store.py            # JSONL append, Markdown render
       notes.py            # note expansion at stop (Ollama)
       assist.py           # question detector + qmx MCP client
@@ -468,7 +500,7 @@ memoir/
 ## 11. Testing
 
 - **Server unit tests:** frame parsing, gap/duplicate handling, VAD segmentation on synthetic audio,
-  scheduler priorities, store/render, question detector, assist threshold / rate limit, note-expansion
+  chunk batching, segment open/close, store/render, question detector, assist threshold / rate limit, note-expansion
   prompt and JSON parsing. Run on the Mac without a GPU (engine, Ollama and qmx mocked).
 - **Server integration** (`-m integration`, against the Spark like qmx): `tools/replay.py` plays a
   recorded call plus LibriSpeech samples at real-time speed and reports partial/final latency p50/p95
@@ -483,7 +515,7 @@ memoir/
 
 | | Milestone | Exit criterion |
 |---|---|---|
-| **M0** | Spark spike: install (Plan A, else B); offline + streaming on sample WAVs with qmx running | Per-chunk decode latency and memory for 0.6B vs 1.7B recorded here; model + install route picked |
+| **M0** | Spark spike with qmx running: install (Plan A, else B, else C); stream sample WAVs and recorded calls through Nemotron EN at 560 ms and 1.12 s, and parakeet-unified-en at 560 ms | Per-step time, memory and WER (vs a reference transcript) recorded here; model, chunk size and install route picked |
 | **M1** | Server: protocol, VAD, partial/final, store, `replay.py`, systemd unit | Replay of a 10-min call: partial p50 ≤ 1.0 s, no lag growth, JSONL + MD written |
 | **M2** | Mac capture CLI (no UI): tap + mic → server, transcript printed in Terminal | Live Zoom and Teams calls transcribed for 30 min; AirPods switch survives; helper processes for Zoom/WebEx confirmed |
 | **M3** | Mac app: menu bar, overlay, reconnect/resume, permission UX, Markdown copy, **in-person mode**, **quick-note hotkey** | Daily-usable on real calls and in-person meetings; notes saved with timestamps |
@@ -496,8 +528,9 @@ answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling re
 
 ## 13. Open questions
 
-1. **0.6B or 1.7B?** Decided by M0 latency on GB10 with qmx loaded.
-2. **Install route** — NGC container (Plan A) or the community fork in a uv venv (Plan B)?
+1. **Nemotron EN or parakeet-unified-en, and 560 ms or 1.12 s chunks?** Decided by M0 on our own
+   recorded calls.
+2. **Install route** — NeMo venv (A), Transformers venv (B) or container (C), §5.2?
 3. ~~Default language~~ — **decided: English only** (D10).
 4. **Zoom / WebEx helper processes** — which one actually plays call audio (M2)?
 5. **Where transcripts live** — Spark as source of truth with a Mac Markdown copy (current plan), or
@@ -513,8 +546,8 @@ answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling re
 
 | First blueprint | v1 | Reason |
 |---|---|---|
-| Qwen-Audio-Chat, `AutoModelForCausalLM` | Qwen3-ASR via `qwen-asr` on vLLM | The draft never passed audio to the model (`raw_samples` unused) and mixed Qwen2-Audio's prompt format with a Qwen-1 model. |
-| Fixed 1.5 s windows, 0.3 s overlap | VAD utterances + streaming partials/finals | Windows cut words, duplicated the overlap, and made "< 800 ms" impossible (1.5 s buffering alone). |
+| Qwen-Audio-Chat, `AutoModelForCausalLM` | Nemotron Speech Streaming EN 0.6B on NeMo | The draft never passed audio to the model (`raw_samples` unused) and mixed Qwen2-Audio's prompt format with a Qwen-1 model. |
+| Fixed 1.5 s windows, 0.3 s overlap | Native cache-aware streaming; VAD closes segments | Windows cut words, duplicated the overlap, and made "< 800 ms" impossible (1.5 s buffering alone). |
 | `model.generate()` inside the async handler | Dedicated ASR thread + scheduler | Blocking the event loop stalled the socket and grew an unbounded backlog. |
 | BlackHole + Multi-Output / Aggregate Device | Process tap + separate mic | No driver, volume keys work, AirPods switching works, Me/Them labels. |
 | `installTap` at 16 kHz on the input node | Tap at hardware format + `AVAudioConverter` | The input node doesn't convert formats — the draft would crash at start. |
@@ -523,6 +556,11 @@ answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling re
 | "LIVE" set as soon as the socket was created | Status from the server's `ready` | Real connection state, plus reconnect/resume. |
 | Nothing saved | JSONL + Markdown per meeting | A memoir needs a record. |
 | `0.0.0.0:8000`, no auth | `:8770` + bearer token | Avoids vLLM's default port; meeting audio is sensitive. |
+
+An intermediate draft (same day) used **Qwen3-ASR-1.7B on vLLM**. It was replaced by Nemotron after the
+English-only decision (D10): Qwen's streaming re-reads the whole utterance on every chunk (so
+utterances had to be capped and lag could build), it needed vLLM with a hard memory cap, and its
+context biasing was buggy.
 
 ## Appendix B — ideas taken from Google AI Edge Foresight
 
@@ -539,11 +577,17 @@ Gemma 4). Compared on 2026-10-17:
 
 ## References
 
-- Qwen3-ASR — repo https://github.com/QwenLM/Qwen3-ASR · model https://huggingface.co/Qwen/Qwen3-ASR-0.6B ·
-  paper https://arxiv.org/abs/2601.21337 · streaming lag reports
-  https://github.com/QwenLM/Qwen3-ASR/issues/148, https://github.com/QwenLM/Qwen3-ASR/issues/199
-- Spark — driver / CUDA ceiling https://forums.developer.nvidia.com/t/379168 · vLLM on DGX Spark
-  https://vllm.ai/blog/2026-06-01-vllm-dgx-spark · aarch64 fork https://github.com/allen2c/Qwen3-ASR
+- Nemotron Speech Streaming EN 0.6B — https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b ·
+  NeMo cache-aware streaming example
+  https://github.com/NVIDIA-NeMo/NeMo/blob/main/examples/asr/asr_cache_aware_streaming/speech_to_text_cache_aware_streaming_infer.py
+  · streaming pipeline config
+  https://github.com/NVIDIA-NeMo/NeMo/blob/main/examples/asr/conf/asr_streaming_inference/cache_aware_rnnt.yaml
+- M0 comparison — https://huggingface.co/nvidia/parakeet-unified-en-0.6b · multilingual sibling (not
+  used) https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b
+- Spark — driver / CUDA ceiling https://forums.developer.nvidia.com/t/379168 · GB10 container recipe
+  https://github.com/cjlapao/qwen3-audio-gb10
+- Considered and replaced — Qwen3-ASR https://github.com/QwenLM/Qwen3-ASR · its DGX Spark port
+  https://github.com/allen2c/Qwen3-ASR
 - Core Audio taps — Apple sample
   https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps ·
   AudioCap https://github.com/insidegui/AudioCap · Heard (call-app bundle IDs)
