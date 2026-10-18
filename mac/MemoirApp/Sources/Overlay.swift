@@ -133,6 +133,10 @@ struct NotesPane: View {
     @State private var draft = ""
     @State private var startedAt: Double?
     @FocusState private var editing: Bool
+    @AppStorage(TextAppearance.fontKey) private var fontName = ""
+    @AppStorage(TextAppearance.sizeKey) private var fontSize = TextAppearance.defaultSize
+
+    private var font: Font { TextAppearance.font(fontName, size: fontSize) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -143,7 +147,7 @@ struct NotesPane: View {
                         ForEach(model.quickNotes) { note in
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(meetingClock(note.t)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                                Text(note.text).font(.callout).textSelection(.enabled)
+                                Text(note.text).font(font).textSelection(.enabled)
                             }
                             .id(note.id)
                         }
@@ -158,7 +162,7 @@ struct NotesPane: View {
 
             if model.isRecording {
                 TextEditor(text: $draft)
-                    .font(.callout)
+                    .font(font)
                     .focused($editing)
                     .scrollContentBackground(.hidden)
                     .padding(4)
@@ -166,7 +170,7 @@ struct NotesPane: View {
                     .background(Color(nsColor: .textBackgroundColor).opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
                     .overlay(alignment: .topLeading) {
                         if draft.isEmpty {
-                            Text("Type a note — ⌘↩ to add").font(.callout).foregroundStyle(.tertiary)
+                            Text("Type a note — ⌘↩ to add").font(font).foregroundStyle(.tertiary)
                                 .padding(.horizontal, 9).padding(.vertical, 4).allowsHitTesting(false)
                         }
                     }
@@ -197,14 +201,19 @@ struct NotesPane: View {
 struct TranscriptRow: View {
     let line: TranscriptModel.Line
     let labelled: Bool
+    @AppStorage(TextAppearance.fontKey) private var fontName = ""
+    @AppStorage(TextAppearance.sizeKey) private var fontSize = TextAppearance.defaultSize
 
     var body: some View {
         let text = Text(line.text).foregroundStyle(line.isFinal ? Color.primary : Color.secondary)
-        if labelled {
-            Text("\(Text(label).bold().foregroundStyle(line.source == "me" ? Color.accentColor : Color.primary)) \(text)")
-        } else {
-            text
+        Group {
+            if labelled {
+                Text("\(Text(label).bold().foregroundStyle(line.source == "me" ? Color.accentColor : Color.primary)) \(text)")
+            } else {
+                text
+            }
         }
+        .font(TextAppearance.font(fontName, size: fontSize))
     }
 
     private var label: String { line.source.prefix(1).uppercased() + line.source.dropFirst() + ":" }

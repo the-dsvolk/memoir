@@ -9,6 +9,8 @@ struct NewCallView: View {
     @State private var name = ""
     @State private var context = ""
     @State private var source = "mic+system"
+    @AppStorage(TextAppearance.fontKey) private var fontName = ""
+    @AppStorage(TextAppearance.sizeKey) private var fontSize = TextAppearance.defaultSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -42,7 +44,7 @@ struct NewCallView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Notes").font(.headline)
                 TextEditor(text: $context)
-                    .font(.body)
+                    .font(TextAppearance.font(fontName, size: fontSize))
                     .scrollContentBackground(.hidden)
                     .padding(6)
                     .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
@@ -50,6 +52,7 @@ struct NewCallView: View {
                     .overlay(alignment: .topLeading) {
                         if context.isEmpty {
                             Text("Optional: attendees, agenda, links…")
+                                .font(TextAppearance.font(fontName, size: fontSize))
                                 .foregroundStyle(.tertiary)
                                 .padding(.horizontal, 11).padding(.vertical, 6)
                                 .allowsHitTesting(false)
