@@ -11,6 +11,9 @@ public enum Source: UInt8, Sendable {
         case .room: "room"
         }
     }
+
+    /// "Me", "Them", "Room".
+    public var label: String { name.prefix(1).uppercased() + name.dropFirst() }
 }
 
 public enum Wire {
@@ -34,23 +37,44 @@ public struct StartMessage: Encodable, Sendable {
     public let type = "start"
     public let meetingId: String
     public let title: String
+    public let context: String
     public let app: String
     public let sources: [String]
     public let sampleRate = Wire.sampleRate
     public let encoding = "pcm_s16le"
 
-    public init(meetingId: String, title: String, app: String = "", sources: [Source]) {
+    public init(meetingId: String, title: String, context: String = "", app: String = "", sources: [Source]) {
         self.meetingId = meetingId
         self.title = title
+        self.context = context
         self.app = app
         self.sources = sources.map(\.name)
     }
 
     enum CodingKeys: String, CodingKey {
-        case type, title, app, sources, encoding
+        case type, title, context, app, sources, encoding
         case meetingId = "meeting_id"
         case sampleRate = "sample_rate"
     }
+}
+
+/// A quick note typed during the call; `t` is the meeting clock in seconds.
+public struct NoteMessage: Encodable, Sendable {
+    public let type = "note"
+    public let id: String
+    public let t: Double
+    public let text: String
+
+    enum CodingKeys: String, CodingKey { case type, id, t, text }
+}
+
+/// The call's name or context notes changed during the call.
+public struct MetaMessage: Encodable, Sendable {
+    public let type = "meta"
+    public let title: String?
+    public let context: String?
+
+    enum CodingKeys: String, CodingKey { case type, title, context }
 }
 
 /// Any message from the server: ready, partial, final, stopped or error.
