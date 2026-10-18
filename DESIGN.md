@@ -18,7 +18,9 @@ DGX Spark `spark-0e81` on the home LAN — the same split qmx uses.
 - Partial (in-progress) text on screen **≤ 1.0 s p50** after the words are spoken; final text for an
   utterance **≤ 1.2 s** after the speaker stops.
 - A 60-minute call runs without lag building up, and survives switching to AirPods mid-call.
-- Every meeting is saved as JSONL + Markdown with per-utterance timestamps.
+- Every call has a **name** and is saved **on the Mac** in its own folder —
+  `~/memoir/2026-10-18_weekly-sync/` (configurable) — with the transcript, my notes and its details;
+  the Spark keeps a backup.
 - My quick notes are expanded into full notes, anchored to the transcript, within ~2 min of the
   meeting ending (M4).
 - When the other side asks a question my qmx knowledge base covers, a hint appears within ~2 s of the
@@ -44,6 +46,8 @@ home LAN (no on-device fallback — decided).
 | D9 | **Live assist = qmx retrieval** over its MCP endpoint, with meetings indexed into qmx | A separate RAG stack | qmx already runs embeddings, a reranker and the index on the same Spark. |
 | D10 | **English only** — ASR language fixed to English, no auto-detect | Auto-detect / per-meeting language | No language-ID flips on short chunks; English prompts and question heuristics; English-only ASR models become candidates. |
 | D11 | **Speaker diarization (for now): `nvidia/diar_streaming_sortformer_4spk-v2.1`** — streaming, on the Them / Room audio, next to Nemotron; words assigned to speakers by time ("Them 1", "Them 2") | Multitalker Parakeet (one ASR per speaker); per-sentence embeddings + clustering | NeMo-native, 117M, up to 4 speakers, ~1 s latency, DER 6.7 % (2-speaker calls) to 16.7 % (AMI) at its low-latency setting; NVIDIA Open Model License. Not implemented yet. |
+| D12 | **The Mac folder is the record**: one folder per call, `<save folder>/YYYY-MM-DD_<call-name>/`, save folder `~/memoir` by default (set in the app); the Spark's JSONL is a **backup** | The Spark as source of truth | The transcript lives where I read and search it; the Spark copy still feeds qmx indexing and note expansion. |
+| D13 | **Named calls with notes; the CLI on par** — every call has a name and notes (free-text context + timestamped quick notes); the app and the CLI share one core (`MemoirKit`: `MeetingSession`, `TranscriptModel`, `MeetingStore`) and one config file | App-only features | Same folder layout and options from both; the CLI stays the tool for testing, recording and scripting. |
 
 ## 3. Architecture
 
@@ -155,8 +159,10 @@ server-side filter: drop a Me final whose normalised text matches a Them final o
   colours.
 - **Status pill from real state:** `connecting` → `live` (only after the server's `ready`) →
   `reconnecting` / `offline`, plus `no system-audio permission` (§4.6) and `server error`.
-- **Menu bar:** start / stop, mode (call / in-person), call-app picker (auto = whichever is
-  outputting), mic picker, click-through, meeting title, open transcripts folder.
+- **Menu bar:** **New call…** (asks for the call's name and optional context notes, then starts),
+  stop, mode (call / in-person), call-app picker (auto = whichever is outputting), mic picker,
+  click-through, open the save folder, Settings (save folder, save audio). The name can be edited until
+  the call stops; its folder is renamed to match (§4.7).
 - **Quick notes:** a global hotkey (default ⌃⌥N, via Carbon `RegisterEventHotKey` — no Accessibility
   permission) opens a one-line input in the overlay; Enter sends, Esc cancels. The note is stamped
   with the meeting clock **when the hotkey was pressed** (you type after hearing the point). The panel
@@ -178,6 +184,48 @@ There is **no public API to check or request** system-audio permission, and when
 succeeds but buffers are all zeros. So: a **silence watchdog** — if the call app reports
 `IsRunningOutput` but the tap delivers only zeros for 5 s, rebuild the tap once; if still zero, show
 "Allow System Audio Recording, then restart memoir" (grants only apply after a restart).
+
+### 4.7 Local record — one folder per call (D12, D13)
+
+The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
+
+```
+~/memoir/                         # save folder: default ~/memoir, set in the app or the config file
+  2026-10-18_weekly-sync/         # <YYYY-MM-DD>_<call-name>, created at Start
+    transcript.txt                # readable: [mm:ss] Me: … / Them: … — finals, corrections applied
+    transcript.jsonl              # raw: every final as received (source, seg, t0, t1, text)
+    notes.md                      # context notes + quick notes with meeting times (+ expanded notes, M4)
+    meeting.json                  # name, start / end, sources, model, server, client (app or CLI)
+    me.wav, them.wav              # only with "save audio" — off by default (~115 MB/hour per source)
+```
+
+- **Folder name:** the date the call started, then the call's name made safe for file systems —
+  lowercase, spaces → `-`, `/ : \` and leading dots removed, at most 60 characters
+  (`Weekly Sync / Q4` → `2026-10-18_weekly-sync-q4`). With no name: `untitled-call-1430`. A name
+  already used that day gets `_2`, `_3`, … (open question 13).
+- **Written as the call goes**, not at the end: the folder is created at Start, each final is appended
+  to `transcript.jsonl` as it arrives (an amended final is appended again with the same `seg`; readers
+  keep the last), and `transcript.txt` is regenerated from it — a crash loses nothing already said.
+  Renaming the call before Stop renames the folder.
+- **Notes, both kinds** (open question 13): free-text **context** typed before, during or after the
+  call (attendees, agenda, links), and **quick notes** typed during it, each stamped with the meeting
+  time (§4.5). Both go to `notes.md` and to the server — context in `start` / `meta`, quick notes as
+  `note` messages — because note expansion needs them (§5.6). Expanded notes come back in
+  `notes_ready` and are added to `notes.md`.
+- **Permissions:** folders `0700`, files `0600`. Keep the save folder out of iCloud-synced places
+  (Desktop and Documents when iCloud Drive syncs them).
+- **One core, one config:** `MeetingStore` in `MemoirKit` writes the folder for both the app and the CLI.
+  Both read `~/.config/memoir/config.toml`; the app's Settings edit it:
+
+  ```toml
+  save_dir   = "~/memoir"
+  save_audio = false
+  server     = "ws://spark-0e81.local:8770/v1/stream"
+  ```
+
+  The CLI follows the same file, with flags to override:
+  `memoir listen --name "Weekly sync" --notes "agenda: …" [--out DIR] [--save-audio]`
+  (replacing today's `--title` and `--save FILE.wav`).
 
 ## 5. Spark service — ASR, notes, assist (`spark-0e81`)
 
@@ -290,7 +338,7 @@ For each `(meeting, source)`:
 ### 5.5 Storage
 
 ```
-~/.memoir/meetings/2026-10-17/1630-weekly-sync-3f9a.jsonl   # source of truth, appended per final
+~/.memoir/meetings/2026-10-17/1630-weekly-sync-3f9a.jsonl   # backup of the Mac record, appended per final
 ~/.memoir/meetings/2026-10-17/1630-weekly-sync-3f9a.md      # rendered at stop
 ```
 
@@ -303,7 +351,8 @@ For each `(meeting, source)`:
 ```
 
 Files are `0600`. **Raw audio is not stored** unless `MEMOIR_SAVE_AUDIO=true` (then 16 kHz FLAC per
-source, for re-transcription and debugging). The Mac also saves a Markdown copy on stop.
+source, for re-transcription and debugging). The **record** is the call's folder on the Mac (§4.7,
+D12); this copy is the backup that qmx indexing (§5.7) and note expansion (§5.6) work from.
 
 ### 5.6 Notes expansion (M4)
 
@@ -316,8 +365,10 @@ source, for re-transcription and debugging). The Mac also saves a Markdown copy 
 - A 60-minute call is ~10k words (~13k tokens), so set `num_ctx` explicitly (32k) rather than trusting
   Ollama's default, which can silently truncate. Longer meetings fall back to one call per note, with
   the transcript from 3 min before to 1 min after the note's timestamp.
-- Results go to the JSONL (`expanded_note`) and to a **Notes** section at the top of the Markdown, each
-  bullet linking to its transcript times. The client gets `notes_ready` if it's still connected.
+- Results go to the Spark copy (`expanded_note` in the JSONL, a **Notes** section in the Markdown) and
+  back to the client in `notes_ready`, which adds them to the call folder's `notes.md` on the Mac, each
+  bullet linking to its transcript times. If the client has already disconnected, they stay on the
+  Spark until it fetches them (M4 detail).
 - It runs **after** the meeting, so it never competes with live ASR. qmx measured ~10 s warm
   round-trips on this model for its own extraction calls; a full transcript should fit the 2-minute
   target comfortably (to measure in M4).
@@ -346,13 +397,15 @@ source, for re-transcription and debugging). The Mac also saves a Markdown copy 
 **Client → server, text frames**
 
 ```json
-{"type":"start","meeting_id":"3f9a…","title":"Weekly sync","app":"us.zoom.xos",
- "sources":["me","them"],"sample_rate":16000,"encoding":"pcm_s16le"}
+{"type":"start","meeting_id":"3f9a…","title":"Weekly sync","context":"agenda: Q4 plan, budget",
+ "app":"us.zoom.xos","sources":["me","them"],"sample_rate":16000,"encoding":"pcm_s16le"}
+{"type":"meta","title":"Weekly sync (Q4)","context":"agenda: Q4 plan, budget; Alice joined"}
 {"type":"note","id":"n3","t":815.2,"text":"beta → Q1? ask re staffing"}
 {"type":"stop"}
 ```
 
-In-person mode sends `"sources":["room"]`. A note's `t` is the meeting clock when the hotkey was
+In-person mode sends `"sources":["room"]`. `title` is the call's name and `context` its free-text
+notes; `meta` updates either during the call. A note's `t` is the meeting clock when the hotkey was
 pressed.
 
 Reconnecting sends the same `start` (same `meeting_id`); the server continues the same file and segment
@@ -377,7 +430,7 @@ numbering.
 {"type":"assist","seg":57,"question":"Do we have numbers on last quarter's churn?",
  "hits":[{"title":"churn-analysis.md","path":"~/kb/…/churn-analysis.md","snippet":"…","score":0.82}]}
 {"type":"stopped","path":"meetings/2026-10-17/1630-weekly-sync-3f9a.md"}
-{"type":"notes_ready","path":"meetings/2026-10-17/1630-weekly-sync-3f9a.md"}
+{"type":"notes_ready","notes":[{"id":"n3","segs":[41,42,43],"text":"The beta ships next quarter (Q1); staffing is still open."}]}
 {"type":"error","code":"unauthorized|busy|bad_frame|engine_down","message":"…"}
 ```
 
@@ -413,7 +466,8 @@ Finals follow the pipeline's 800 ms end-of-utterance window (not yet measured on
 - **LAN-only**, like qmx — but meeting audio is more sensitive than qmx queries, so a **bearer token is
   required** (32 random bytes; `~/.config/memoir/env` on the Spark, Keychain on the Mac). No TLS in v1;
   TLS or Tailscale before it ever leaves the home LAN.
-- Transcripts `0600` under `~/.memoir`; raw audio off by default.
+- Transcripts `0600` — in the call folders on the Mac (folders `0700`, §4.7) and the backup under
+  `~/.memoir` on the Spark; raw audio off by default.
 - Notes expansion and assist stay on the Spark (local Ollama and qmx) — nothing goes to a cloud
   service.
 - **Consent is on the user.** Some jurisdictions require every participant's consent to record or
@@ -504,9 +558,11 @@ memoir/
     tools/replay.py       # streams a WAV in real time over the protocol, measures latency
     tests/
   mac/
-    Memoir.xcodeproj
-    Memoir/
-      App/  Capture/  Stream/  Transcript/  Notes/  UI/
+    MemoirKit/            # Swift package, shared by the CLI and the app (D13)
+      Sources/MemoirKit/  # capture, conversion, wire protocol, MeetingSession, TranscriptModel, MeetingStore
+      Sources/memoir/     # the `memoir` CLI
+      Tests/
+    MemoirApp/            # menu-bar app + overlay (M3); project file TBD (XcodeGen or Xcode)
   deploy/
     memoir-asr.service
     memoir-index.path     # + .service — runs `qmx index` after each meeting
@@ -534,7 +590,7 @@ memoir/
 | **M0** | Spark spike with qmx running: install (Plan A, else B, else C); stream sample WAVs and recorded calls through Nemotron EN at 560 ms and 1.12 s, and parakeet-unified-en at 560 ms | Per-step time, memory and WER (vs a reference transcript) recorded here; model, chunk size and install route picked |
 | **M1** | Server: protocol, VAD, partial/final, store, `replay.py`, systemd unit | Replay of a 10-min call: partial p50 ≤ 1.0 s, no lag growth, JSONL + MD written |
 | **M2** | Mac capture CLI (no UI): tap + mic → server, transcript printed in Terminal | Live Zoom and Teams calls transcribed for 30 min; AirPods switch survives; helper processes for Zoom/WebEx confirmed |
-| **M3** | Mac app: menu bar, overlay, reconnect/resume, permission UX, Markdown copy, **in-person mode**, **quick-note hotkey** | Daily-usable on real calls and in-person meetings; notes saved with timestamps |
+| **M3** | Mac app: menu bar, overlay, **New call… (name + notes)**, **per-call folder on the Mac** (§4.7), reconnect/resume, permission UX, **in-person mode**, **quick-note hotkey**; the CLI on par (same `MemoirKit` core and config) | Daily-usable on real calls and in-person meetings; every call in `~/memoir/<date>_<name>/` |
 | **M4** | Hardening + **note expansion at stop**: echo filter, call auto-detect (`IsRunningOutput`), silence watchdog, `INFRA.md` | A week of real meetings without manual fixes; expanded notes ready ≤ 2 min after stop |
 | **M5** | **Live assist via qmx**: question detector, qmx `query`, hint card; meetings indexed into qmx | Over a week, at least half the hints shown are useful (my judgement); past meetings findable via qmx |
 
@@ -558,8 +614,7 @@ fallback.
 2. **Install route** — NeMo venv (A), Transformers venv (B) or container (C), §5.2?
 3. ~~Default language~~ — **decided: English only** (D10).
 4. **Zoom / WebEx helper processes** — which one actually plays call audio (M2)?
-5. **Where transcripts live** — Spark as source of truth with a Mac Markdown copy (current plan), or
-   mirror both ways?
+5. ~~Where transcripts live~~ — **decided: the Mac folder is the record, the Spark a backup** (D12).
 6. **Headphones-only for v1** acceptable until the M4 echo filter?
 7. **Quick-note hotkey** — is ⌃⌥N free in my setup?
 8. **Assist** — is the punctuation / interrogative heuristic good enough, or do we need an LLM
@@ -574,6 +629,8 @@ fallback.
 12. **Names** (seen live: a first name misheard). NeMo's phrase boosting can bias towards a list of
     names; it runs a Triton kernel, which works now on uv's managed Python (INSTALL.md #4). Feed it
     from qmx or a per-meeting list?
+13. **Call-folder defaults to confirm** (§4.7) — a name already used that day gets `_2`; notes are both
+    free-text context and timestamped quick notes; saving audio is off.
 
 ## Appendix A — changes from the first blueprint
 
