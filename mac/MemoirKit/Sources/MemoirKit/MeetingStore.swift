@@ -157,7 +157,12 @@ public final class MeetingStore: @unchecked Sendable {
         text += context.isEmpty ? "_(none)_\n" : context.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
         if !quickNotes.isEmpty {
             text += "\n## During the call\n\n"
-            text += quickNotes.map { "- [\(Self.clock($0.t))] \($0.text)" }.joined(separator: "\n") + "\n"
+            // A multi-line note stays one list item: continuation lines are indented under the bullet.
+            text += quickNotes.map { note in
+                "- [\(Self.clock(note.t))] "
+                    + note.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .split(separator: "\n", omittingEmptySubsequences: false).joined(separator: "\n  ")
+            }.joined(separator: "\n") + "\n"
         }
         try write("notes.md", text)
     }

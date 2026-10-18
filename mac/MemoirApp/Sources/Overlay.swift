@@ -6,7 +6,7 @@ import SwiftUI
 /// Space, never activates the app — but can take typing for the quick-note field.
 final class OverlayPanel: NSPanel {
     init(rootView: some View) {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 560, height: 240),
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 780, height: 300),
                    styleMask: [.nonactivatingPanel, .borderless, .resizable],
                    backing: .buffered, defer: false)
         level = .floating
@@ -39,7 +39,6 @@ final class OverlayController {
 
 struct OverlayView: View {
     let model: AppModel
-    @State private var note = ""
     @State private var name = ""
 
     var body: some View {
@@ -79,28 +78,29 @@ struct OverlayView: View {
                 }
             }
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(model.transcript.lines) { line in
-                            TranscriptRow(line: line, labelled: model.sources.count > 1).id(line.id)
+            HStack(alignment: .top, spacing: 12) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(model.transcript.lines) { line in
+                                TranscriptRow(line: line, labelled: model.sources.count > 1).id(line.id)
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onChange(of: model.transcript.lines.last?.text) {
+                        if let last = model.transcript.lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
                 }
-                .onChange(of: model.transcript.lines.last?.text) {
-                    if let last = model.transcript.lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if model.isRecording || !model.quickNotes.isEmpty {
+                    Divider()
+                    NotesPane(model: model).frame(width: 260)
                 }
             }
 
-            if model.isRecording {
-                TextField("Quick note — Enter to add", text: $note)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        model.addNote(note)
-                        note = ""
-                    }
-            } else if !model.lastSummary.isEmpty, let folder = model.folder {
+            if !model.isRecording, !model.lastSummary.isEmpty, let folder = model.folder {
                 HStack {
                     Text("Saved to \(folder.lastPathComponent)").font(.caption).foregroundStyle(.secondary)
                     Spacer()
@@ -109,16 +109,86 @@ struct OverlayView: View {
             }
         }
         .padding(12)
-        .frame(minWidth: 380, minHeight: 160)
+        .frame(minWidth: 560, minHeight: 200)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .onAppear { name = model.callName }
         .onChange(of: model.callName) { name = model.callName }
     }
 
-    private func clock(_ seconds: TimeInterval) -> String {
-        let s = max(0, Int(seconds))
-        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
-                         : String(format: "%02d:%02d", s / 60, s % 60)
+    private func clock(_ seconds: TimeInterval) -> String { meetingClock(seconds) }
+}
+
+func meetingClock(_ seconds: TimeInterval) -> String {
+    let s = max(0, Int(seconds))
+    return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                     : String(format: "%02d:%02d", s / 60, s % 60)
+}
+
+/// Notes on the right of the transcript: the notes added so far, and a multi-line editor. A note is
+/// stamped with the meeting time when you start typing it (you write after hearing the point).
+struct NotesPane: View {
+    let model: AppModel
+    @State private var draft = ""
+    @State private var startedAt: Double?
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Notes").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.quickNotes) { note in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(meetingClock(note.t)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                Text(note.text).font(.callout).textSelection(.enabled)
+                            }
+                            .id(note.id)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .onChange(of: model.quickNotes.count) {
+                    if let last = model.quickNotes.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+            .frame(maxHeight: .infinity)
+
+            if model.isRecording {
+                TextEditor(text: $draft)
+                    .font(.callout)
+                    .focused($editing)
+                    .scrollContentBackground(.hidden)
+                    .padding(4)
+                    .frame(minHeight: 70, maxHeight: 110)
+                    .background(Color(nsColor: .textBackgroundColor).opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(alignment: .topLeading) {
+                        if draft.isEmpty {
+                            Text("Type a note — ⌘↩ to add").font(.callout).foregroundStyle(.tertiary)
+                                .padding(.horizontal, 9).padding(.vertical, 4).allowsHitTesting(false)
+                        }
+                    }
+                    .onChange(of: draft) { old, new in
+                        if old.isEmpty, !new.isEmpty { startedAt = model.elapsed }
+                        if new.isEmpty { startedAt = nil }
+                    }
+                HStack {
+                    if let startedAt { Text("at \(meetingClock(startedAt))").font(.caption2).foregroundStyle(.secondary) }
+                    Spacer()
+                    Button("Add Note") { add() }
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private func add() {
+        model.addNote(draft, at: startedAt)
+        draft = ""
+        startedAt = nil
+        editing = true
     }
 }
 

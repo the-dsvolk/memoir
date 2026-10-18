@@ -35,7 +35,9 @@ private let oct18 = DateComponents(calendar: .current, year: 2026, month: 10, da
     try store.record(final: .init(type: "final", source: "me", seg: 0, text: "Hello.", t0: 3))
     try store.record(final: .init(type: "final", source: "them", seg: 0, text: "Hi all.", t0: 1))  // amended
     try store.addQuickNote(at: 65, "ask about budget")
+    try store.addQuickNote(at: 70, "follow up:\nAlice owns the vendor\n")
     try store.finish(serverPath: "meetings/x.jsonl")
+    #expect(try read(store.folder, "notes.md").hasSuffix("- [01:10] follow up:\n  Alice owns the vendor\n"))
 
     #expect(try read(store.folder, "transcript.txt") == "[00:01] Them: Hi all.\n[00:03] Me: Hello.\n")
     #expect(try read(store.folder, "transcript.jsonl").split(separator: "\n").count == 3)

@@ -12,6 +12,12 @@ final class AppModel {
         case failed(String)
     }
 
+    struct QuickNote: Identifiable, Equatable {
+        let id = UUID()
+        let t: Double  // meeting clock, seconds
+        let text: String
+    }
+
     var status: Status = .idle
     var config = MemoirConfig.load()
     var transcript = TranscriptModel()
@@ -25,6 +31,10 @@ final class AppModel {
     var silenceHint = false
     var lastSummary = ""
     var overlayVisible = false
+    var quickNotes: [QuickNote] = []
+
+    /// The meeting clock (seconds since the server said ready), for note timestamps.
+    var elapsed: Double { session?.elapsed ?? 0 }
 
     @ObservationIgnored private var session: MeetingSession?
     @ObservationIgnored private var store: MeetingStore?
@@ -47,6 +57,7 @@ final class AppModel {
         callName = name
         self.context = context
         transcript.clear()
+        quickNotes.removeAll()
         silenceHint = false
         lastSummary = ""
         startedAt = nil
@@ -124,11 +135,13 @@ final class AppModel {
         Task { try? await session?.sendMeta(title: name) }
     }
 
-    func addNote(_ text: String) {
+    /// Adds a quick note, stamped at `t` (when typing began) or now.
+    func addNote(_ text: String, at t: Double? = nil) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let session, let store else { return }
-        let t = session.elapsed
+        let t = t ?? session.elapsed
         try? store.addQuickNote(at: t, text)
+        quickNotes.append(QuickNote(t: t, text: text))
         Task { try? await session.sendNote(id: "n\(Int(t * 1000))", at: t, text: text) }
     }
 
