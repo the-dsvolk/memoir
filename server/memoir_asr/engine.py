@@ -49,6 +49,8 @@ class Engine:
         cfg = OmegaConf.load(CONFIG)
         cfg.asr.model_name = nemo_file
         cfg.streaming.att_context_size = [70, CHUNK_MS_TO_RIGHT_CONTEXT[chunk_ms]]
+        # No custom vocabulary yet; per-stream biasing runs a Triton kernel on every step (INSTALL.md #4).
+        cfg.asr.decoding.greedy.enable_per_stream_biasing = False
         cfg.streaming.batch_size = 4  # me / them / room, plus headroom
         cfg.streaming.num_slots = 8
         cfg.enable_itn = False  # numbers stay words for now (DESIGN.md open question 10)

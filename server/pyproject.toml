@@ -12,7 +12,10 @@ dependencies = [
 ]
 
 [tool.uv]
-package = false                     # no importable package yet (M0); scripts run with `uv run`
+package = false                     # run with `uv run --no-sync python -m memoir_asr` from server/
+# uv's own CPython ships its headers; the system 3.12 has none, and Triton compiles a C helper
+# against them at first kernel launch (INSTALL.md #4).
+python-preference = "only-managed"
 # The server only runs on the Spark (Linux aarch64); the cu130 index has no macOS wheels.
 environments = ["sys_platform == 'linux' and platform_machine == 'aarch64'"]
 
