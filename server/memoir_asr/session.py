@@ -131,8 +131,10 @@ class Session:
         valid = len(pcm) // 2
         samples = np.zeros(self.frame_samples, dtype=np.float32)
         samples[:valid] = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        # The last frame counts its silence padding as real audio: with only a few valid samples the
+        # pipeline skips the step, and with it the tail flush that emits the final punctuation.
         frame = StreamFrame(src.stream_id, samples, is_first=not src.started, is_last=is_last,
-                            length=max(valid, 1) if is_last else self.frame_samples)
+                            length=self.frame_samples)
         src.started = True
         src.fed += valid
         return frame
