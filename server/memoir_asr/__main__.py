@@ -4,8 +4,10 @@ import logging
 import os
 
 os.environ.setdefault("WANDB_MODE", "disabled")
-# memoir's own model cache: ~/.cache/huggingface/hub on spark-0e81 is root-owned (INSTALL.md #2).
+# memoir's own caches: on spark-0e81, ~/.cache/huggingface/hub and ~/.triton/cache are root-owned,
+# left by Docker runs (INSTALL.md #2, #3).
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/memoir/huggingface"))
+os.environ.setdefault("TRITON_CACHE_DIR", os.path.expanduser("~/.cache/memoir/triton"))
 
 import uvicorn  # noqa: E402
 
