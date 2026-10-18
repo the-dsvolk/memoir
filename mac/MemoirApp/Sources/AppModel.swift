@@ -8,7 +8,7 @@ import Observation
 @Observable
 final class AppModel {
     enum Status: Equatable {
-        case idle, connecting, live, stopping
+        case idle, connecting, waitingForNetwork, live, stopping
         case failed(String)
     }
 
@@ -30,7 +30,7 @@ final class AppModel {
     @ObservationIgnored private var store: MeetingStore?
     @ObservationIgnored private let overlay = OverlayController()
 
-    var isRecording: Bool { [.connecting, .live, .stopping].contains(status) }
+    var isRecording: Bool { [.connecting, .waitingForNetwork, .live, .stopping].contains(status) }
 
     var sources: [Source] {
         switch source {
@@ -57,19 +57,36 @@ final class AppModel {
         var store: MeetingStore?
         do {
             guard let server = URL(string: config.server) else { throw AppError("bad server URL \(config.server)") }
+            let token = try config.token()
             let newStore = try MeetingStore(saveDir: config.saveDirectory, name: name, context: context,
                                             sources: sources, client: "memoir-app", saveAudio: config.saveAudio)
             store = newStore
-            let session = MeetingSession(options: SessionOptions(
-                server: server, token: try config.token(), sources: sources, name: name, context: context,
-                app: "memoir-app"))
-            if newStore.saveAudio {
-                session.onAudio = { source, samples in try? newStore.record(audio: samples, from: source) }
-            }
             self.store = newStore
-            self.session = session
             folder = newStore.folder
-            let events = try await session.start()
+            var events: AsyncStream<SessionEvent>?
+            for attempt in 1 ... Self.networkAttempts {
+                // A session is single-use, so each attempt gets a fresh one.
+                let session = MeetingSession(options: SessionOptions(
+                    server: server, token: token, sources: sources, name: name, context: context, app: "memoir-app"))
+                if newStore.saveAudio {
+                    session.onAudio = { source, samples in try? newStore.record(audio: samples, from: source) }
+                }
+                self.session = session
+                do {
+                    events = try await session.start()
+                    break
+                } catch MemoirError.localNetworkBlocked(_) where attempt < Self.networkAttempts {
+                    // The Local Network prompt may be up: connections fail until it's answered (INSTALL.md #6).
+                    status = .waitingForNetwork
+                    try? await Task.sleep(for: .seconds(2))
+                    if status == .stopping {
+                        newStore.discardIfEmpty()
+                        finish(.idle)
+                        return
+                    }
+                }
+            }
+            guard let events else { throw AppError("couldn't connect to \(config.server)") }
             startedAt = Date()
             for await event in events { handle(event) }
         } catch {
@@ -78,8 +95,21 @@ final class AppModel {
         }
     }
 
+    /// How many times to try connecting while macOS's Local Network prompt may be pending (~2 s apart).
+    private static let networkAttempts = 10
+
+    /// Starts the last call again (after a failure).
+    func retry() async {
+        await start(name: callName, context: context, source: source)
+    }
+
     func stop() {
-        guard let session, status != .stopping else { return }
+        guard status != .stopping else { return }
+        if status == .waitingForNetwork {  // the retry loop notices and ends quietly
+            status = .stopping
+            return
+        }
+        guard let session else { return }
         status = .stopping
         session.stop()
     }

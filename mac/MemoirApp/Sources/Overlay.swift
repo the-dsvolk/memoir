@@ -67,8 +67,16 @@ struct OverlayView: View {
                 Text("No system audio yet — if something is playing, allow Memoir under System Settings › Privacy & Security › Screen & System Audio Recording, then restart Memoir.")
                     .font(.caption).foregroundStyle(.orange)
             }
+            if model.status == .waitingForNetwork {
+                Text("Waiting for network access — if macOS asks, allow Memoir to find devices on your local network (System Settings › Privacy & Security › Local Network).")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if case .failed(let message) = model.status {
-                Text(message).font(.caption).foregroundStyle(.red).lineLimit(4)
+                HStack(alignment: .top) {
+                    Text(message).font(.caption).foregroundStyle(.red).lineLimit(4)
+                    Spacer()
+                    Button("Retry") { Task { await model.retry() } }.controlSize(.small)
+                }
             }
 
             ScrollViewReader { proxy in
@@ -148,6 +156,7 @@ struct StatusPill: View {
         switch status {
         case .idle: "idle"
         case .connecting: "connecting…"
+        case .waitingForNetwork: "waiting for network…"
         case .live: "live"
         case .stopping: "saving…"
         case .failed: "error"
@@ -158,7 +167,7 @@ struct StatusPill: View {
         switch status {
         case .live: .green
         case .failed: .red
-        case .connecting, .stopping: .orange
+        case .connecting, .waitingForNetwork, .stopping: .orange
         case .idle: .gray
         }
     }
