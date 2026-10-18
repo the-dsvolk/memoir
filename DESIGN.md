@@ -37,7 +37,7 @@ home LAN (no on-device fallback — decided).
 | D2 | **Nemotron Speech Streaming EN 0.6B** (`nvidia/nemotron-speech-streaming-en-0.6b`, pinned) | Qwen3-ASR-1.7B (earlier draft), Qwen-Audio-Chat (first blueprint) | True cache-aware streaming (each 80 ms frame processed once — no lag build-up), English-only like D10, 0.6B, tested on DGX Spark, NVIDIA Open Model License. |
 | D3 | **Core Audio process taps** for call audio | BlackHole + Multi-Output Device | No driver; volume keys keep working; follows the call app, not an output device. |
 | D4 | **Mic captured separately** → two streams, Me / Them | One mixed Aggregate Device | Speaker labels for free; lets us handle echo/bleed. |
-| D5 | **One continuous stream per source; VAD only closes segments** | Fixed 1.5 s windows | The model streams natively (D2); VAD turns its running text into timed final segments. |
+| D5 | **One continuous stream per source; the pipeline's end-of-utterance detector closes segments** | Fixed 1.5 s windows; Silero VAD | The model streams natively (D2); NeMo's streaming pipeline cuts its running text into timed, punctuated finals (Silero not needed in v1). |
 | D6 | **Port 8770** on the Spark | 8000 | 8000 is vLLM's default; 8770 sits next to qmx's 8765 and is free. |
 | D7 | **In-person mode = mic only**, labelled **Room** | Call apps only | Same pipeline minus the tap; needs no system-audio permission. |
 | D8 | **Quick notes typed on the Mac, expanded on the Spark** by `qwen3.6:35b-a3b`, the model qmx already serves via Ollama | No notes, or a new model | The transcript alone is the least useful part; notes are where the value is, and the model is already loaded. |
@@ -205,24 +205,23 @@ succeeds but buffers are all zeros. So: a **silence watchdog** — if the call a
 
   Default **560 ms**: within 0.14 points of the best setting, with partials twice a second. Meeting
   audio (AMI) is the hardest set for every model — M0 measures on our own calls.
-- **API shape** — NeMo cache-aware streaming (argument names from NeMo's
-  `speech_to_text_cache_aware_streaming_infer.py`; exact return values confirmed in M0):
+- **API** (used by the MVP) — NeMo 3.0's streaming-inference pipeline, `CacheAwareRNNTPipeline` in
+  `nemo.collections.asr.inference`. It keeps per-stream feature and encoder caches, runs its own
+  end-of-utterance detector, and returns partial and final (punctuated) text each step, for many
+  streams at once:
 
   ```python
-  asr = nemo_asr.models.ASRModel.from_pretrained("nvidia/nemotron-speech-streaming-en-0.6b")
-  asr.encoder.set_default_att_context_size([70, 6])            # 560 ms chunks
-  caches = asr.encoder.get_initial_cache_state(batch_size=2)   # one row per source
-  # every 560 ms, mel features of the new chunk for each source →
-  out = asr.conformer_stream_step(processed_signal=feats, processed_signal_length=lens,
-                                  cache_last_channel=..., cache_last_time=...,
-                                  cache_last_channel_len=..., previous_hypotheses=hyps,
-                                  return_transcription=True)
-  # → updated caches + hypotheses; tokens added since the last step extend the partial
+  pipeline = PipelineBuilder.build_pipeline(cfg)  # NeMo's cache_aware_rnnt.yaml + memoir's overrides
+  pipeline.open_session()
+  outs = pipeline.transcribe_step([Frame(samples=chunk, stream_id=sid, is_first=first,
+                                         is_last=last, length=valid, options=ASRRequestOptions())])
+  # → out.partial_transcript, out.final_transcript, out.final_segments (start / end seconds)
   ```
 
-  Alternative: 🤗 Transformers ≥ 5.13 (`AutoModelForRNNT` + `processor.set_num_lookahead_tokens(6)`),
-  whose streaming example feeds `model.generate(..., streamer=TextIteratorStreamer)` from a generator of
-  per-chunk `input_features` — ours would block on the source's live audio queue (§5.2 Plan B).
+  Each step takes exactly one 560 ms frame (8,960 samples) per stream. Config overrides: pinned
+  `.nemo` path, `att_context_size [70, 6]`, bf16, per-stream biasing off (INSTALL.md #4),
+  `return_tail_result` on. Fallbacks: NeMo's lower-level `conformer_stream_step`, or 🤗 Transformers
+  ≥ 5.13 (`AutoModelForRNNT` with a generator of per-chunk `input_features`).
 - **No timestamps from the stream itself** in v1; segment times come from sample counts (§5.3). RNN-T
   token timestamps (NeMo) or Riva's word offsets are a later add-on. **No custom vocabulary** in v1 —
   the model card doesn't offer it; NeMo's word boosting for transducers is a later experiment.
@@ -264,16 +263,19 @@ plus `apt-get install libsndfile1 ffmpeg`.
 For each `(meeting, source)`:
 
 1. **Ingest** frames into a ring buffer by `sample_offset`; fill gaps with silence, drop duplicates.
-2. **Stream** — one continuous cache-aware stream per source for the whole meeting. Every 560 ms of
-   new audio becomes one stream step (§5.4); the tokens it adds extend the **open segment**, which is
-   sent as a partial. Silence is fed too: it keeps the encoder's context and costs almost nothing.
-3. **Segment ends** — Silero VAD (CPU, 32 ms frames) runs alongside. A segment **opens** at speech
-   start and **closes** after 600 ms of silence — by then the stream has emitted all its words — and its
-   text becomes a **final**, appended to the store. The decoder hypothesis is then reset; the encoder
-   caches are kept. Segments longer than 30 s close at the next ≥ 200 ms pause (readability, not cost).
-4. **Times** — `t0` / `t1` = VAD speech start / end as sample offsets ÷ 16,000 (seconds since meeting
-   start, per source clock). The model's input rate is read from its preprocessor at start-up and
-   asserted to be 16 kHz.
+2. **Stream** — one pipeline stream per source for the whole meeting. Every 560 ms of new audio becomes
+   one step (§5.4); the step's `partial_transcript` (text since the last end of utterance) is sent as
+   a partial when it changes. Silence is fed too: it keeps the context and costs almost nothing.
+3. **Segment ends** — the pipeline's end-of-utterance detector (an 800 ms window) closes a segment;
+   its `final_transcript` becomes a **final**, appended to the store, with `t0` / `t1` from the
+   pipeline's text segments (seconds since the source's start).
+4. **Late punctuation** — the model often emits a sentence's closing punctuation one step after the
+   cut, so it would open the next segment ("? Alice will …") or arrive alone ("."). The server strips
+   leading punctuation and re-sends the previous final, same `seg`, with it appended.
+5. **Stream end** — on `stop` (or a dropped socket) every source gets a last frame with at least
+   0.25 s of audio (silence counts) **and** some zero padding: `return_tail_result` emits the words in
+   that padding (often the final "."), and a near-empty frame is skipped (INSTALL.md #5). Any partial
+   still open then becomes a final.
 
 ### 5.4 Concurrency
 
@@ -379,6 +381,9 @@ numbering.
 ```
 
 Partials carry the **whole** current text of the segment (not a delta), so the client just replaces it.
+Partials and finals also carry **`upto`** — seconds of that source's audio the model has consumed —
+so clients can measure latency. A **`final` re-sent with an earlier `seg` replaces it** (late
+punctuation, §5.3); clients key segments by `(source, seg)`.
 
 ## 7. Latency budget
 
@@ -397,6 +402,10 @@ targets until M0/M1 put real numbers here.
 
 **Assist hint:** the question's final (≈ 1 s after it ends) + question check + qmx query (~0.1–0.5 s,
 to measure) → on screen ≤ 2 s after the question ends.
+
+**Measured (MVP, 2026-10-17, synthetic speech, Mac → `spark-0e81` over the LAN):** a partial arrives
+**0.02–0.03 s after its 560 ms chunk completes**, so a word waits 0.03–0.62 s — about 0.3 s typically.
+Finals follow the pipeline's 800 ms end-of-utterance window (not yet measured on its own).
 
 ## 8. Security and privacy
 
@@ -426,6 +435,7 @@ MEMOIR_MODEL_REVISION=ebe59e5a817142986528bbbee5dba8db7b38ed50
 MEMOIR_CHUNK_MS=560                # att_context_size [70, 6]; 1120 = [70, 13]
 MEMOIR_DATA_DIR=/home/dsvolk/.memoir
 HF_HOME=/home/dsvolk/.cache/memoir/huggingface   # ~/.cache/huggingface/hub is root-owned (INSTALL.md #2)
+TRITON_CACHE_DIR=/home/dsvolk/.cache/memoir/triton  # ~/.triton/cache too (INSTALL.md #3)
 WANDB_MODE=disabled
 MEMOIR_SAVE_AUDIO=false
 MEMOIR_OLLAMA_URL=http://localhost:11434
@@ -527,6 +537,11 @@ memoir/
 | **M4** | Hardening + **note expansion at stop**: echo filter, call auto-detect (`IsRunningOutput`), silence watchdog, `INFRA.md` | A week of real meetings without manual fixes; expanded notes ready ≤ 2 min after stop |
 | **M5** | **Live assist via qmx**: question detector, qmx `query`, hint card; meetings indexed into qmx | Over a week, at least half the hints shown are useful (my judgement); past meetings findable via qmx |
 
+**MVP (2026-10-17, branch `feat/mvp-mic`):** the core of M1 plus a mic-only client — `memoir-asr`
+(WebSocket, NeMo streaming pipeline, partials / finals, late-punctuation fix, JSONL store, bearer
+token) and the Swift `memoir listen` command (Mac mic → 16 kHz → server, live transcript in the
+terminal). Not yet: the call tap, the overlay app, notes, assist, resume. Run it: [`INSTALL.md`](./INSTALL.md).
+
 **Later:** full summaries / action items; expanding a note live, during the meeting; LLM-composed
 answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling remote speakers apart;
 `spark-0f50` fail-over; ScreenCaptureKit as a capture fallback.
@@ -548,6 +563,12 @@ answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling re
    `qmx-mcp` on the same `index.db`.
 10. **Numbers as digits?** The model writes "forty two thousand dollars". Add ITN (NeMo's streaming
     pipeline has it) for finals only, both partials and finals, or neither?
+11. **Segment cuts mid-sentence** (seen live: "…the design of new" / "system"). Lengthen the
+    end-of-utterance window (800 ms → ~1.2 s), or merge a final that has no closing punctuation into
+    the next one?
+12. **Names** (seen live: a first name misheard). NeMo's phrase boosting can bias towards a list of
+    names; it runs a Triton kernel, which works now on uv's managed Python (INSTALL.md #4). Feed it
+    from qmx or a per-meeting list?
 
 ## Appendix A — changes from the first blueprint
 
