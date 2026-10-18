@@ -6,10 +6,12 @@ Qwen-Audio-Chat). What changed and why is in [Appendix A](#appendix-a--changes-f
 
 ## 1. Goal
 
-While I'm on a video call (Zoom, Microsoft Teams, WebEx) on the Mac, show a **live transcript** in a
-small always-on-top window, labelled **Me** (my microphone) and **Them** (the call's audio), and **keep
-a record** of every meeting. The Mac only captures and displays; transcription runs on the DGX Spark
-`spark-0e81` on the home LAN — the same split qmx uses.
+While I'm on a video call (Zoom, Microsoft Teams, WebEx) on the Mac — or in an in-person meeting —
+show a **live transcript** in a small always-on-top window, labelled **Me** (my microphone) and
+**Them** (the call's audio); let me jot **quick notes** that get expanded from the transcript when the
+meeting ends; surface **relevant docs from qmx** when someone asks a question; and **keep a record**
+of every meeting. The Mac only captures and displays; transcription, notes and retrieval run on the
+DGX Spark `spark-0e81` on the home LAN — the same split qmx uses.
 
 **v1 success criteria**
 
@@ -17,9 +19,14 @@ a record** of every meeting. The Mac only captures and displays; transcription r
   utterance **≤ 1.2 s** after the speaker stops.
 - A 60-minute call runs without lag building up, and survives switching to AirPods mid-call.
 - Every meeting is saved as JSONL + Markdown with per-utterance timestamps.
+- My quick notes are expanded into full notes, anchored to the transcript, within ~2 min of the
+  meeting ending (M4).
+- When the other side asks a question my qmx knowledge base covers, a hint appears within ~2 s of the
+  question ending (M5).
 
-**Non-goals (v1)** — summaries, telling apart *multiple* remote speakers, translation, more than one
-client or one meeting at a time, use away from the home LAN, any cloud service.
+**Non-goals (v1)** — full meeting summaries / action items (only my own notes get expanded), telling
+apart *multiple* remote or in-room speakers, translation, more than one client or one meeting at a
+time, any cloud service, and use away from the home LAN (no on-device fallback — decided).
 
 ## 2. Settled decisions
 
@@ -31,6 +38,9 @@ client or one meeting at a time, use away from the home LAN, any cloud service.
 | D4 | **Mic captured separately** → two streams, Me / Them | One mixed Aggregate Device | Speaker labels for free; lets us handle echo/bleed. |
 | D5 | **Server cuts speech into utterances (VAD)** and streams each one | Fixed 1.5 s windows | Qwen3-ASR streaming re-reads the whole utterance each chunk, so utterances must stay short. |
 | D6 | **Port 8770** on the Spark | 8000 | 8000 is vLLM's default; 8770 sits next to qmx's 8765 and is free. |
+| D7 | **In-person mode = mic only**, labelled **Room** | Call apps only | Same pipeline minus the tap; needs no system-audio permission. |
+| D8 | **Quick notes typed on the Mac, expanded on the Spark** by `qwen3.6:35b-a3b`, the model qmx already serves via Ollama | No notes, or a new model | The transcript alone is the least useful part; notes are where the value is, and the model is already loaded. |
+| D9 | **Live assist = qmx retrieval** over its MCP endpoint, with meetings indexed into qmx | A separate RAG stack | qmx already runs embeddings, a reranker and the index on the same Spark. |
 
 ## 3. Architecture
 
@@ -41,11 +51,16 @@ client or one meeting at a time, use away from the home LAN, any cloud service.
    └─ Core Audio process tap ──┐                      │
                                ├─ resample → 16 kHz   ├─ per source: Silero VAD → utterances (≤ 20 s)
  Microphone (AVAudioEngine) ───┘   mono s16, 100 ms   │
-                                   frames tagged      ├─ ASR worker (one thread, owns the model)
-                                   Me / Them ───────► │    Qwen3-ASR-1.7B  streaming_transcribe()
-                                                      │    → partial every ~1 s, final at end of speech
+   (in-person mode: mic only)      frames tagged      ├─ ASR worker (one thread, owns the model)
+                                   Me / Them / Room ► │    Qwen3-ASR-1.7B  streaming_transcribe()
+ Quick note (hotkey) ────────────── note JSON ──────► │    → partial every ~1 s, final at end of speech
+                                                      │
  Overlay HUD (NSPanel) ◄──── partial / final JSON ────┤
- Menu bar: start/stop, app + mic pickers              └─ ~/.memoir/meetings/<date>/<id>.jsonl (+ .md)
+                       ◄──── assist hint ─────────────┼─ question? → qmx query (MCP :8765, same box)
+ Menu bar: start/stop, mode, app + mic pickers        │
+                                                      └─ ~/.memoir/meetings/<date>/<id>.jsonl (+ .md)
+                                                         at stop: notes → Ollama qwen3.6:35b-a3b
+                                                         → expanded notes; qmx indexes the .md
 ```
 
 | Subsystem | Runs on | Components |
@@ -55,11 +70,20 @@ client or one meeting at a time, use away from the home LAN, any cloud service.
 | Streaming client | Mac | `URLSessionWebSocketTask`, framing, reconnect + 30 s resend buffer |
 | UI | Mac | SwiftUI in an AppKit `NSPanel` overlay, `MenuBarExtra` |
 | ASR service | Spark | asyncio WebSocket server, Silero VAD, `qwen-asr` on vLLM, transcript store |
+| Notes | Mac → Spark | hotkey note entry; expansion at stop via qmx's Ollama (`qwen3.6:35b-a3b`) |
+| Live assist | Spark | question detector on finals → qmx `query` → hint card in the overlay |
 
 ## 4. Mac client
 
 Native app, Swift 6.2 / Xcode 26, **deployment target macOS 26** (my only Mac runs 26.7; the tap API
 itself needs 14.2, and 26 adds tapping by bundle ID). Menu-bar app (`LSUIElement`), not sandboxed.
+
+Two **capture modes**, picked in the menu bar:
+
+| Mode | Sources | Needs |
+|---|---|---|
+| **Call** | Them (process tap, §4.1) + Me (mic, §4.2) | system-audio + mic permission |
+| **In-person** | Room (mic only, §4.2) — everyone in the room on one stream | mic permission |
 
 ### 4.1 Call audio — process tap ("Them")
 
@@ -103,7 +127,7 @@ itself needs 14.2, and 26 adds tapping by bundle ID). Menu-bar app (`LSUIElement
 - **No voice processing** (`setVoiceProcessingEnabled`): it ducks all other audio, including the call,
   and can cut off another app's mic stream.
 
-### 4.3 Echo / bleed
+### 4.3 Echo / bleed (call mode)
 
 On laptop speakers the mic hears the remote side, so "Me" would transcribe "Them" a second time.
 v1: **headphones recommended**; the app shows a hint when output is the built-in speakers. M4 adds a
@@ -128,8 +152,15 @@ server-side filter: drop a Me final whose normalised text matches a Them final o
   colours.
 - **Status pill from real state:** `connecting` → `live` (only after the server's `ready`) →
   `reconnecting` / `offline`, plus `no system-audio permission` (§4.6) and `server error`.
-- **Menu bar:** start / stop, call-app picker (auto = whichever is outputting), mic picker,
-  click-through, meeting title, open transcripts folder.
+- **Menu bar:** start / stop, mode (call / in-person), call-app picker (auto = whichever is
+  outputting), mic picker, click-through, meeting title, open transcripts folder.
+- **Quick notes:** a global hotkey (default ⌃⌥N, via Carbon `RegisterEventHotKey` — no Accessibility
+  permission) opens a one-line input in the overlay; Enter sends, Esc cancels. The note is stamped
+  with the meeting clock **when the hotkey was pressed** (you type after hearing the point). The panel
+  subclass overrides `canBecomeKey`, so it takes typing without activating the app or pulling focus
+  from the call. Notes stay pinned in the overlay as bullets.
+- **Assist hint:** one card at a time under the transcript — the detected question, then the top qmx
+  hit (title, path, snippet). Click copies the path; it auto-hides after 20 s or on Esc.
 
 ### 4.6 Permissions, signing, packaging
 
@@ -145,7 +176,7 @@ succeeds but buffers are all zeros. So: a **silence watchdog** — if the call a
 `IsRunningOutput` but the tap delivers only zeros for 5 s, rebuild the tap once; if still zero, show
 "Allow System Audio Recording, then restart memoir" (grants only apply after a restart).
 
-## 5. ASR service (`spark-0e81`)
+## 5. Spark service — ASR, notes, assist (`spark-0e81`)
 
 ### 5.1 Model and engine
 
@@ -226,10 +257,46 @@ For each `(meeting, source)`:
 {"type":"meeting","meeting_id":"3f9a…","title":"Weekly sync","app":"us.zoom.xos",
  "started_at":"2026-10-17T16:30:00-07:00","model":"Qwen/Qwen3-ASR-1.7B","language":"English"}
 {"type":"final","source":"them","seg":42,"t0":812.48,"t1":817.90,"text":"So the plan for next quarter is to ship the beta."}
+{"type":"note","id":"n3","t":815.2,"text":"beta → Q1? ask re staffing"}
+{"type":"expanded_note","id":"n3","segs":[41,42,43],"text":"The beta ships next quarter (Q1); staffing for it is still open — follow up."}
 ```
 
 Files are `0600`. **Raw audio is not stored** unless `MEMOIR_SAVE_AUDIO=true` (then 16 kHz FLAC per
 source, for re-transcription and debugging). The Mac also saves a Markdown copy on stop.
+
+### 5.6 Notes expansion (M4)
+
+- Notes arrive as `note` messages and are appended to the JSONL as they come.
+- At `stop`, after the last final is written, the server makes **one call** to `qwen3.6:35b-a3b` on
+  qmx's Ollama (`localhost:11434`) with the full transcript (Me / Them / Room labels and times) and all
+  notes, asking to expand each note **using only what was said**, and to return the segment ids it
+  relied on. Output is schema-constrained JSON (Ollama `format`, `think=false`) — the same pattern
+  qmx's consolidation uses.
+- A 60-minute call is ~10k words (~13k tokens), so set `num_ctx` explicitly (32k) rather than trusting
+  Ollama's default, which can silently truncate. Longer meetings fall back to one call per note, with
+  the transcript from 3 min before to 1 min after the note's timestamp.
+- Results go to the JSONL (`expanded_note`) and to a **Notes** section at the top of the Markdown, each
+  bullet linking to its transcript times. The client gets `notes_ready` if it's still connected.
+- It runs **after** the meeting, so it never competes with live ASR. qmx measured ~10 s warm
+  round-trips on this model for its own extraction calls; a full transcript should fit the 2-minute
+  target comfortably (to measure in M4).
+
+### 5.7 Live assist (M5)
+
+- **Trigger:** a **final** from Them or Room (not Me — I asked it) that looks like a question: it ends
+  in `?` (Qwen3-ASR punctuates) or starts with an interrogative (what / how / why / when / where / who
+  / which / can / could / do / does / is / are / should / will), and has ≥ 5 words. An LLM classifier
+  is the fallback if the heuristic proves too noisy.
+- **Lookup:** call qmx's `query` tool on its MCP endpoint (`http://localhost:8765/mcp`, same Spark)
+  with the question plus the previous ~30 s of transcript as context, `k = 5`, reranked when qmx's
+  reranker is enabled.
+- **Show** the top hit only if its score clears a threshold (tuned on real meetings), at most one hint
+  per 30 s, and never the same path twice in a meeting.
+- **Answers:** v1 shows the retrieved snippet — fast, and it can't hallucinate. Composing a one-line
+  answer from the hits with `qwen3.6:35b-a3b` (+5–10 s) is an option behind a setting.
+- **Meetings feed qmx:** after each meeting qmx indexes its Markdown (§9), so past meetings become
+  searchable — and can answer questions in later ones.
+- Assist runs off the ASR thread and never delays partials or finals.
 
 ## 6. Wire protocol
 
@@ -240,8 +307,12 @@ source, for re-transcription and debugging). The Mac also saves a Markdown copy 
 ```json
 {"type":"start","meeting_id":"3f9a…","title":"Weekly sync","app":"us.zoom.xos",
  "sources":["me","them"],"sample_rate":16000,"encoding":"pcm_s16le","language":"English"}
+{"type":"note","id":"n3","t":815.2,"text":"beta → Q1? ask re staffing"}
 {"type":"stop"}
 ```
+
+In-person mode sends `"sources":["room"]`. A note's `t` is the meeting clock when the hotkey was
+pressed.
 
 Reconnecting sends the same `start` (same `meeting_id`); the server continues the same file and segment
 numbering.
@@ -250,7 +321,7 @@ numbering.
 
 | Offset | Size | Field |
 |---|---|---|
-| 0 | 1 | `source` — 0 = me, 1 = them |
+| 0 | 1 | `source` — 0 = me, 1 = them, 2 = room |
 | 1 | 3 | reserved, 0 |
 | 4 | 8 | `sample_offset` — u64 LE, index of the first sample since meeting start, per source |
 | 12 | n | PCM s16le, 16 kHz mono (100 ms = 3,200 bytes) |
@@ -262,7 +333,10 @@ numbering.
 {"type":"partial","source":"them","seg":42,"t0":812.48,"text":"so the plan for next quarter is"}
 {"type":"final","source":"them","seg":42,"t0":812.48,"t1":817.90,"text":"So the plan for next quarter is to ship the beta."}
 {"type":"status","lag_ms":{"me":120,"them":340}}
+{"type":"assist","seg":57,"question":"Do we have numbers on last quarter's churn?",
+ "hits":[{"title":"churn-analysis.md","path":"~/kb/…/churn-analysis.md","snippet":"…","score":0.82}]}
 {"type":"stopped","path":"meetings/2026-10-17/1630-weekly-sync-3f9a.md"}
+{"type":"notes_ready","path":"meetings/2026-10-17/1630-weekly-sync-3f9a.md"}
 {"type":"error","code":"unauthorized|busy|bad_frame|engine_down","message":"…"}
 ```
 
@@ -284,12 +358,17 @@ Partials carry the **whole** current text of the segment (not a delta), so the c
 0.8–1.0 s after the speaker stops. Lowering `chunk_size_sec` to 0.5 s trades GPU calls for snappier
 partials. These are targets until M0/M1 put real numbers here.
 
+**Assist hint:** the question's final (≈ 1 s after it ends) + question check + qmx query (~0.1–0.5 s,
+to measure) → on screen ≤ 2 s after the question ends.
+
 ## 8. Security and privacy
 
 - **LAN-only**, like qmx — but meeting audio is more sensitive than qmx queries, so a **bearer token is
   required** (32 random bytes; `~/.config/memoir/env` on the Spark, Keychain on the Mac). No TLS in v1;
   TLS or Tailscale before it ever leaves the home LAN.
 - Transcripts `0600` under `~/.memoir`; raw audio off by default.
+- Notes expansion and assist stay on the Spark (local Ollama and qmx) — nothing goes to a cloud
+  service.
 - **Consent is on the user.** Some jurisdictions require every participant's consent to record or
   transcribe a call, and employers may restrict sending work-meeting audio to personal hardware. The
   overlay always shows that transcription is on.
@@ -310,6 +389,11 @@ MEMOIR_GPU_MEM_UTIL=0.10
 MEMOIR_LANGUAGE=English
 MEMOIR_DATA_DIR=/data              # ~/.memoir inside the container
 MEMOIR_SAVE_AUDIO=false
+MEMOIR_OLLAMA_URL=http://localhost:11434
+MEMOIR_NOTES_MODEL=qwen3.6:35b-a3b
+MEMOIR_NOTES_NUM_CTX=32768
+MEMOIR_QMX_MCP_URL=http://localhost:8765/mcp
+MEMOIR_ASSIST=true
 ```
 
 `~/.config/systemd/user/memoir-asr.service` (sketch — finalised in M0):
@@ -322,7 +406,7 @@ Wants=network-online.target
 
 [Service]
 ExecStart=/usr/bin/docker run --rm --name memoir-asr --gpus all --user %U \
-  -p 8770:8770 --env-file %h/.config/memoir/env \
+  --network host --env-file %h/.config/memoir/env \
   -v %h/.memoir:/data -v %h/.cache/huggingface:/hf -e HF_HOME=/hf \
   -v %h/GitHub/the-dsvolk/memoir/server:/app -w /app \
   memoir-asr:local python -m memoir_asr
@@ -334,7 +418,15 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-`--user` keeps files written to `/data` owned by me, not root. Port map after M1:
+`--user` keeps files written to `/data` owned by me, not root; `--network host` lets the container reach
+Ollama and qmx on `localhost` and serve `:8770` directly.
+
+M5 adds `memoir-index.path` (+ `.service`): `PathChanged=%h/.memoir/meetings/.last-stop` — a file the
+server touches after writing a meeting's Markdown — runs
+`uv run --project %h/GitHub/the-dsvolk/qmx qmx index %h/.memoir/meetings`. (A path unit doesn't watch
+subdirectories, hence the trigger file.)
+
+Port map after M1:
 
 | Port | Service |
 |---|---|
@@ -358,28 +450,33 @@ memoir/
       vad.py              # Silero wrapper, utterance segmentation
       engine.py           # ASR thread, scheduler, qwen-asr calls
       store.py            # JSONL append, Markdown render
+      notes.py            # note expansion at stop (Ollama)
+      assist.py           # question detector + qmx MCP client
     tools/replay.py       # streams a WAV in real time over the protocol, measures latency
     tests/
   mac/
     Memoir.xcodeproj
     Memoir/
-      App/  Capture/  Stream/  Transcript/  UI/
+      App/  Capture/  Stream/  Transcript/  Notes/  UI/
   deploy/
     memoir-asr.service
+    memoir-index.path     # + .service — runs `qmx index` after each meeting
     env.example
 ```
 
 ## 11. Testing
 
 - **Server unit tests:** frame parsing, gap/duplicate handling, VAD segmentation on synthetic audio,
-  scheduler priorities, store/render. Run on the Mac without a GPU (engine mocked).
+  scheduler priorities, store/render, question detector, assist threshold / rate limit, note-expansion
+  prompt and JSON parsing. Run on the Mac without a GPU (engine, Ollama and qmx mocked).
 - **Server integration** (`-m integration`, against the Spark like qmx): `tools/replay.py` plays a
   recorded call plus LibriSpeech samples at real-time speed and reports partial/final latency p50/p95
   and WER against reference text.
 - **Mac unit tests:** framer, resampler (48 kHz stereo → 16 kHz mono), transcript model.
 - **Manual test plan:** Zoom test call and Teams "make a test call"; AirPods connect/disconnect
   mid-call; system-audio permission denied; Spark unreachable for 20 s then back (resume without gaps);
-  60-minute call for lag build-up.
+  60-minute call for lag build-up; an in-person meeting (mic only); notes typed during a call come out
+  expanded at stop; a question planted in a test call brings up the expected qmx hint.
 
 ## 12. Milestones
 
@@ -388,11 +485,12 @@ memoir/
 | **M0** | Spark spike: install (Plan A, else B); offline + streaming on sample WAVs with qmx running | Per-chunk decode latency and memory for 0.6B vs 1.7B recorded here; model + install route picked |
 | **M1** | Server: protocol, VAD, partial/final, store, `replay.py`, systemd unit | Replay of a 10-min call: partial p50 ≤ 1.0 s, no lag growth, JSONL + MD written |
 | **M2** | Mac capture CLI (no UI): tap + mic → server, transcript printed in Terminal | Live Zoom and Teams calls transcribed for 30 min; AirPods switch survives; helper processes for Zoom/WebEx confirmed |
-| **M3** | Mac app: menu bar, overlay, reconnect/resume, permission UX, Markdown copy | Daily-usable on real calls |
-| **M4** | Hardening: echo filter, call auto-detect (`IsRunningOutput`), silence watchdog, `INFRA.md` | A week of real calls without manual fixes |
+| **M3** | Mac app: menu bar, overlay, reconnect/resume, permission UX, Markdown copy, **in-person mode**, **quick-note hotkey** | Daily-usable on real calls and in-person meetings; notes saved with timestamps |
+| **M4** | Hardening + **note expansion at stop**: echo filter, call auto-detect (`IsRunningOutput`), silence watchdog, `INFRA.md` | A week of real meetings without manual fixes; expanded notes ready ≤ 2 min after stop |
+| **M5** | **Live assist via qmx**: question detector, qmx `query`, hint card; meetings indexed into qmx | Over a week, at least half the hints shown are useful (my judgement); past meetings findable via qmx |
 
-**Later:** meeting summaries with the `qwen3.6:35b-a3b` model already on the Spark's Ollama; index
-`~/.memoir/meetings` into qmx; word timestamps via Qwen3-ForcedAligner; telling remote speakers apart;
+**Later:** full summaries / action items; expanding a note live, during the meeting; LLM-composed
+answers in hints by default; word timestamps via Qwen3-ForcedAligner; telling remote speakers apart;
 `spark-0f50` fail-over; ScreenCaptureKit as a capture fallback.
 
 ## 13. Open questions
@@ -404,6 +502,11 @@ memoir/
 5. **Where transcripts live** — Spark as source of truth with a Mac Markdown copy (current plan), or
    mirror both ways?
 6. **Headphones-only for v1** acceptable until the M4 echo filter?
+7. **Quick-note hotkey** — is ⌃⌥N free in my setup?
+8. **Assist** — is the punctuation / interrogative heuristic good enough, or do we need an LLM
+   classifier? And query the Spark's shared qmx index (current plan) or the Mac's personal one?
+9. **qmx indexing while its server runs** — confirm `qmx index` is safe alongside the resident
+   `qmx-mcp` on the same `index.db`.
 
 ## Appendix A — changes from the first blueprint
 
@@ -420,6 +523,19 @@ memoir/
 | Nothing saved | JSONL + Markdown per meeting | A memoir needs a record. |
 | `0.0.0.0:8000`, no auth | `:8770` + bearer token | Avoids vLLM's default port; meeting audio is sensitive. |
 
+## Appendix B — ideas taken from Google AI Edge Foresight
+
+Foresight (Google Labs, Oct 2026) is an offline Mac meeting-notes app: mic + system audio, shorthand
+notes expanded from the live transcript, and Q&A over a personal knowledge base (EmbeddingGemma 2 +
+Gemma 4). Compared on 2026-10-17:
+
+| Idea | Taken? | Where |
+|---|---|---|
+| In-person meetings (mic only) | Yes | D7, §4, M3 |
+| Shorthand notes expanded from the transcript | Yes | D8, §4.5, §5.6, M3–M4 |
+| Live answers from a personal knowledge base | Yes — via qmx | D9, §5.7, M5 |
+| On-device transcription when the Spark is unreachable | **No** — home-LAN only, by decision | §1 non-goals |
+
 ## References
 
 - Qwen3-ASR — repo https://github.com/QwenLM/Qwen3-ASR · model https://huggingface.co/Qwen/Qwen3-ASR-0.6B ·
@@ -435,3 +551,5 @@ memoir/
   https://github.com/pasrom/meeting-transcriber/issues/791 · all-zero buffers
   https://developer.apple.com/forums/thread/825780 · audiotee https://github.com/makeusabrew/audiotee
 - qmx deployment pattern on the same Spark — `qmx/INFRA.md`
+- Google AI Edge Foresight — https://developers.google.com/edge/foresight · coverage
+  https://9to5google.com/2026/10/08/google-ai-edge-foresight/
