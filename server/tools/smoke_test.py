@@ -3,7 +3,8 @@
 Usage (on spark-0e81, from server/):
     uv run python tools/smoke_test.py hello.wav [more.wav ...]
 
-Env: MEMOIR_MODEL, MEMOIR_MODEL_REVISION, MEMOIR_CHUNK_MS (80 | 160 | 560 | 1120).
+Env: MEMOIR_MODEL, MEMOIR_MODEL_REVISION, MEMOIR_CHUNK_MS (80 | 160 | 560 | 1120),
+HF_HOME (default ~/.cache/memoir/huggingface).
 """
 
 import os
@@ -11,6 +12,8 @@ import sys
 import time
 
 os.environ.setdefault("WANDB_MODE", "disabled")
+# memoir's own model cache: ~/.cache/huggingface/hub on spark-0e81 is root-owned (Docker runs).
+os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/memoir/huggingface"))
 
 import torch  # noqa: E402
 from huggingface_hub import hf_hub_download  # noqa: E402
