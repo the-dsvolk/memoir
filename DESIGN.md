@@ -42,11 +42,11 @@ home LAN (no on-device fallback — decided).
 | D5 | **One continuous stream per source; the pipeline's end-of-utterance detector closes segments** | Fixed 1.5 s windows; Silero VAD | The model streams natively (D2); NeMo's streaming pipeline cuts its running text into timed, punctuated finals (Silero not needed in v1). |
 | D6 | **Port 8770** on the Spark | 8000 | 8000 is vLLM's default; 8770 sits next to qmx's 8765 and is free. |
 | D7 | **In-person mode = mic only**, labelled **Room** | Call apps only | Same pipeline minus the tap; needs no system-audio permission. |
-| D8 | **Quick notes typed on the Mac, expanded on the Spark** by `qwen3.6:35b-a3b`, the model qmx already serves via Ollama | No notes, or a new model | The transcript alone is the least useful part; notes are where the value is, and the model is already loaded. |
+| D8 | **After the call, a pipeline of steps on the Mac** (`~/.config/memoir/pipeline.toml`, §4.8) — today a Cursor-SDK agent writes `summary.md` (summary, decisions, action items, my notes expanded), then `create_gdoc.sh` makes it a Google Doc. Chosen per call in New Call, with **Keep local only** *(revised 2026-10-18)* | Notes expanded on the Spark by `qwen3.6:35b-a3b` (the first plan, §5.6); one hard-wired summarizer | The transcript alone is the least useful part; a strong model with my tools and org context (MCP) does more than a local one, and steps are scripts I can swap without rebuilding the app. |
 | D9 | **Live assist = qmx retrieval** over its MCP endpoint, with meetings indexed into qmx | A separate RAG stack | qmx already runs embeddings, a reranker and the index on the same Spark. |
 | D10 | **English only** — ASR language fixed to English, no auto-detect | Auto-detect / per-meeting language | No language-ID flips on short chunks; English prompts and question heuristics; English-only ASR models become candidates. |
 | D11 | **Speaker diarization (for now): `nvidia/diar_streaming_sortformer_4spk-v2.1`** — streaming, on the Them / Room audio, next to Nemotron; words assigned to speakers by time ("Them 1", "Them 2") | Multitalker Parakeet (one ASR per speaker); per-sentence embeddings + clustering | NeMo-native, 117M, up to 4 speakers, ~1 s latency, DER 6.7 % (2-speaker calls) to 16.7 % (AMI) at its low-latency setting; NVIDIA Open Model License. Not implemented yet. |
-| D12 | **The Mac folder is the record**: one folder per call, `<save folder>/YYYY-MM-DD_<call-name>/`, save folder `~/memoir` by default (set in the app); the Spark's JSONL is a **backup** | The Spark as source of truth | The transcript lives where I read and search it; the Spark copy still feeds qmx indexing and note expansion. |
+| D12 | **The Mac folder is the record**: one folder per call, `<save folder>/YYYY-MM-DD_<call-name>/`, save folder `~/memoir` by default (set in the app); the Spark's JSONL is a **backup** | The Spark as source of truth | The transcript lives where I read and search it — and where the after-the-call steps run (§4.8); the Spark copy still feeds qmx indexing. |
 | D13 | **Named calls with prep and notes; the CLI on par** — every call has a name, **prep** (material for the call — attendees, agenda, past notes, docs — written in New Call and appended to during the call with timestamps, `prep.md`) and **notes** (mine, during the call, `notes.md`); the app and the CLI share one core (`MemoirKit`: `MeetingSession`, `TranscriptModel`, `MeetingStore`) and one config file | App-only features | Same folder layout and options from both; the CLI stays the tool for testing, recording and scripting. |
 
 ## 3. Architecture
@@ -66,8 +66,8 @@ home LAN (no on-device fallback — decided).
                        ◄──── assist hint ─────────────┼─ question? → qmx query (MCP :8765, same box)
  Menu bar: start/stop, mode, app + mic pickers        │
                                                       └─ ~/.memoir/meetings/<date>/<id>.jsonl (+ .md)
-                                                         at stop: notes → Ollama qwen3.6:35b-a3b
-                                                         → expanded notes; qmx indexes the .md
+                                                         backup; qmx indexes the .md
+                                                         (summaries: the Mac pipeline, §4.8)
 ```
 
 | Subsystem | Runs on | Components |
@@ -196,9 +196,11 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
     transcript.txt                # readable: [mm:ss] Me: … / Them: … — finals, corrections applied
     transcript.jsonl              # raw: every final as received (source, seg, t0, t1, text)
     prep.md                       # material for the call: before it, + timestamped additions during it
-    notes.md                      # my notes during the call, with meeting times (+ expanded notes, M4)
-    meeting.json                  # name, start / end, sources, model, server, client (app or CLI)
+    notes.md                      # my notes during the call, with meeting times
+    meeting.json                  # name, start / end, sources, model, server, client, post-call choice
     me.wav, them.wav              # only with "save audio" — off by default (~115 MB/hour per source)
+    summary.md                    # written after the call by the Summary step (§4.8)
+    pipeline/                     # the after-the-call runner's: state.json + one <step>.log per step
 ```
 
 - **Folder name:** the date the call started, then the call's name made safe for file systems —
@@ -211,7 +213,7 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
   Renaming the call before Stop renames the folder.
 - **Prep and notes are separate files**, because post-processing uses them differently: **prep** is
   grounding (names, spellings, facts, earlier decisions), **notes** are my points to expand and check
-  against the transcript (§5.6).
+  against the transcript (the Summary step, §4.8).
   - **`prep.md`** — free text written in the New Call window ("Before the call"), then **append-only
     during the call**: each addition (someone joined, a doc was pasted) goes under "Added during the
     call" with the meeting time, so post-processing knows when the context changed:
@@ -228,9 +230,9 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
   - **`notes.md`** — my notes during the call, `- [mm:ss] …`, a multi-line note kept as one item.
   - Both entries are stamped when I *start typing* (I write after hearing the point). Both also go to
     the server — prep in `start` and as `prep` messages, notes as `note` messages — for the Spark backup
-    and live features (name hints, D11 speaker naming). Expanded notes come back in `notes_ready` and
-    are added to `notes.md`. No structure is required in prep: "Attendees: …" is a convention a later
-    step can parse.
+    and live features (name hints, D11 speaker naming). Notes are expanded after the call, in
+    `summary.md` (§4.8). No structure is required in prep: "Attendees: …" is a convention a later step
+    can parse.
 - **Permissions:** folders `0700`, files `0600`. Keep the save folder out of iCloud-synced places
   (Desktop and Documents when iCloud Drive syncs them).
 - **One core, one config:** `MeetingStore` in `MemoirKit` writes the folder for both the app and the CLI.
@@ -245,6 +247,82 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
   The CLI follows the same file, with flags to override:
   `memoir listen --name "Weekly sync" --prep "agenda: …" [--prep-file agenda.md] [--out DIR] [--save-audio]`
   (replacing today's `--title` and `--save FILE.wav`). The CLI takes prep before the call only.
+
+### 4.8 After the call — the pipeline (D8)
+
+When a call is saved, a short **pipeline of steps runs on the Mac** against its folder: today
+**Summary** (a Cursor-SDK agent writes `summary.md` — summary, decisions, action items, my notes
+expanded and checked against the transcript) and then **Google Doc** (`create_gdoc.sh` turns
+`summary.md` into a doc in My Drive). The steps are scripts listed in `~/.config/memoir/pipeline.toml`,
+so they change without rebuilding the app; Memoir.app and the CLI read the same file.
+
+```toml
+min_finals = 5                      # shorter calls aren't processed automatically
+
+[[step]]
+id = "summary"
+label = "Summary"
+cwd = "~/GitHub/Cruise/CursorSDKExample"
+run = ["uv", "run", "python", "main.py", "{call}"]
+keychain = { CURSOR_API_KEY = "cursor-api-key" }   # security find-generic-password -a $USER -s … -w
+outputs = ["summary.md"]
+remote = true                       # sends the call off this Mac
+default = true                      # ticked in New Call
+timeout = 1800
+
+[[step]]
+id = "gdoc"
+label = "Google Doc"
+needs = ["summary"]
+run = ["~/.claude/skills/md-to-gdoc/create_gdoc.sh", "{call}/summary.md", "{name} — {date}"]
+```
+
+**Steps.** `run` is an argv (no shell quoting) with `{call}`, `{folder}`, `{name}`, `{date}` filled
+in; `cwd` defaults to the call folder; `needs` orders them (a small DAG — loops and unknown names are
+rejected when the file is read); `env` and `keychain` add environment variables, the latter read with
+`security find-generic-password`, so no secret sits in the file. `remote` (default **true**, the safe
+side) marks a step that sends the call elsewhere; `default` ticks it in New Call.
+
+**Running a step** (`PipelineRunner` in `MemoirKit`):
+
+- Through **my login shell** (`$SHELL -l -c 'exec "$@"'`): an app started by macOS doesn't read
+  `~/.bash_profile`, so without this `uv` and `gcloud` aren't on its PATH. Same environment as Terminal,
+  no paths hard-coded in memoir.
+- In **its own process group**: Cancel and timeouts send SIGTERM to the whole group (then SIGKILL after
+  5 s), which also stops what the step started — `uv`'s Python, the agent's helpers.
+- Output (stdout + stderr) to `<call>/pipeline/<id>.log`; progress in `<call>/pipeline/state.json`
+  (status, times, exit code, message, link). The raw call files are never touched by the runner.
+- **Done** means exit 0 **and** every `outputs` file (re)written during this run — a `summary.md` left
+  from an earlier run doesn't count. If the last line printed is a link, it's kept as the step's
+  result (the Google Doc).
+- A step whose need failed is **skipped**; one that already succeeded (outputs still there) is
+  **reused** unless forced; if a need has to run again, so does the step after it.
+- **One runner per call** (a lock in `pipeline/`), so the app and the CLI never process the same call
+  at once; the app runs one call's pipeline at a time and queues the rest.
+
+**In the app.**
+
+- **New Call** has an *After the call* row: a checkbox per step (ticking one ticks what it needs) and
+  **Keep local only**, which turns remote steps off. The choice goes into `meeting.json`
+  (`postprocess: {steps, keep_local}`).
+- There's **one Stop**: stopping is always instant. Processing starts when the call is saved (if it
+  has at least `min_finals` lines; otherwise **Process Anyway**).
+- Below the transcript: `✓ Saved · ◌ Summary 0:42 · ○ Google Doc`, then **Open Summary**, **Open
+  Google Doc**, **Copy Link**, plus a ⋯ menu to run a step again, see its log or open the folder. A
+  failure shows its last line with **Show Log** and **Retry**.
+- A notification says when it's ready (clicking opens the doc).
+- **Recent Calls** in the menu bar does the same for earlier calls. Running a remote step on a "keep
+  local" call asks first, and quitting while a step runs asks first too.
+- The name stays editable after Stop (the doc title uses it), except while a step works in the folder.
+
+**In the CLI.** `memoir process <call-folder>` runs the steps chosen for the call (else the
+defaults), skipping finished ones: `--step ID` (again, with what it needs), `--force`, `--list`,
+`--allow-remote`, `-v`; Ctrl-C cancels; links go to stdout. `memoir listen` takes `--steps`,
+`--keep-local` and `--no-process`, and runs the pipeline after the call.
+
+**Not yet:** updating an existing Google Doc on a re-run (the script always makes a new one); doc
+folder in Drive; an `enhanced/` folder and provenance (model, prompt version) for each output; steps
+that write back to Jira / Slack (they'd need an approval step).
 
 ## 5. Spark service — ASR, notes, assist (`spark-0e81`)
 
@@ -371,9 +449,12 @@ For each `(meeting, source)`:
 
 Files are `0600`. **Raw audio is not stored** unless `MEMOIR_SAVE_AUDIO=true` (then 16 kHz FLAC per
 source, for re-transcription and debugging). The **record** is the call's folder on the Mac (§4.7,
-D12); this copy is the backup that qmx indexing (§5.7) and note expansion (§5.6) work from.
+D12); this copy is the backup that qmx indexing (§5.7) works from.
 
 ### 5.6 Notes expansion (M4)
+
+> **Superseded (2026-10-18)** by the Mac pipeline (§4.8, D8): notes are expanded in `summary.md` by
+> the Summary step. Kept as the design for a **local** step later (one that never leaves the LAN).
 
 - Notes arrive as `note` messages and are appended to the JSONL as they come.
 - At `stop`, after the last final is written, the server makes **one call** to `qwen3.6:35b-a3b` on
@@ -579,10 +660,12 @@ memoir/
     tests/
   mac/
     MemoirKit/            # Swift package, shared by the CLI and the app (D13)
-      Sources/MemoirKit/  # capture, conversion, wire protocol, MeetingSession, TranscriptModel, MeetingStore
-      Sources/memoir/     # the `memoir` CLI
+      Sources/MemoirKit/  # capture, conversion, wire protocol, MeetingSession, TranscriptModel, MeetingStore,
+                          # PipelineConfig + PipelineRunner (§4.8), TOML
+      Sources/memoir/     # the `memoir` CLI: listen, process
       Tests/
-    MemoirApp/            # menu-bar app + overlay (M3); project file TBD (XcodeGen or Xcode)
+    MemoirApp/            # menu-bar app + overlay (M3); XcodeGen project.yml
+    pipeline.example.toml # → ~/.config/memoir/pipeline.toml (§4.8)
   deploy/
     memoir-asr.service
     memoir-index.path     # + .service — runs `qmx index` after each meeting
@@ -611,7 +694,7 @@ memoir/
 | **M1** | Server: protocol, VAD, partial/final, store, `replay.py`, systemd unit | Replay of a 10-min call: partial p50 ≤ 1.0 s, no lag growth, JSONL + MD written |
 | **M2** | Mac capture CLI (no UI): tap + mic → server, transcript printed in Terminal | Live Zoom and Teams calls transcribed for 30 min; AirPods switch survives; helper processes for Zoom/WebEx confirmed |
 | **M3** | Mac app: menu bar, overlay, **New call… (name + notes)**, **per-call folder on the Mac** (§4.7), reconnect/resume, permission UX, **in-person mode**, **quick-note hotkey**; the CLI on par (same `MemoirKit` core and config) | Daily-usable on real calls and in-person meetings; every call in `~/memoir/<date>_<name>/` |
-| **M4** | Hardening + **note expansion at stop**: echo filter, call auto-detect (`IsRunningOutput`), silence watchdog, `INFRA.md` | A week of real meetings without manual fixes; expanded notes ready ≤ 2 min after stop |
+| **M4** | Hardening: echo filter, call auto-detect (`IsRunningOutput`), silence watchdog, `INFRA.md` | A week of real meetings without manual fixes |
 | **M5** | **Live assist via qmx**: question detector, qmx `query`, hint card; meetings indexed into qmx | Over a week, at least half the hints shown are useful (my judgement); past meetings findable via qmx |
 
 **MVP (2026-10-17, branch `feat/mvp-mic`):** the core of M1 plus a mic-only client — `memoir-asr`
@@ -628,9 +711,14 @@ Teams / browser), the overlay app, notes, assist, resume. Run it: [`INSTALL.md`]
 menu bar, New Call… (name, sources, prep), the overlay (status pill, editable name, timer, live
 transcript, a **Notes | Prep** pane with a multi-line editor), Settings (shared config; one font for
 transcript and notes), and the per-call folder of §4.7 with `prep.md` and `notes.md`. Not yet:
-reconnect / resume, device-change handling, the quick-note hotkey, per-app taps, expanded notes.
+reconnect / resume, device-change handling, the quick-note hotkey, per-app taps.
 
-**Later:** full summaries / action items; expanding a note live, during the meeting; LLM-composed
+**After the call (2026-10-18, branch `feat/app`):** the pipeline of §4.8 — `pipeline.toml`,
+`PipelineRunner`, New Call's *After the call* choices, the progress row under the transcript with
+Open / Copy Link, Recent Calls, a notification, and `memoir process`. Steps today: the Cursor-SDK
+summary and `create_gdoc.sh`.
+
+**Later:** expanding a note live, during the meeting; LLM-composed
 answers in hints by default; word timestamps (the pipeline's word-level output); speaker diarization
 with Sortformer (D11), then naming speakers; `spark-0f50` fail-over; ScreenCaptureKit as a capture
 fallback.
@@ -660,6 +748,11 @@ fallback.
 13. **Call-folder defaults to confirm** (§4.7) — a name already used that day gets `_2`; saving audio
     is off. (Decided: prep in `prep.md`, written in New Call and append-only during the call; notes in
     `notes.md` during the call only.)
+14. **Remote steps and policy** (§4.8) — Summary sends work-call transcripts to Cursor and its model
+    provider; Google Doc puts summaries in Drive. Confirm both are approved uses for meeting content,
+    and whether Summary and Google Doc should stay ticked by default.
+15. **Re-runs make a new Google Doc** each time (`create_gdoc.sh` only creates). Update the same doc
+    instead (Drive `files.update` with conversion — to verify), and put docs in a "Memoir" folder?
 
 ## Appendix A — changes from the first blueprint
 
@@ -690,7 +783,7 @@ Gemma 4). Compared on 2026-10-17:
 | Idea | Taken? | Where |
 |---|---|---|
 | In-person meetings (mic only) | Yes | D7, §4, M3 |
-| Shorthand notes expanded from the transcript | Yes | D8, §4.5, §5.6, M3–M4 |
+| Shorthand notes expanded from the transcript | Yes | D8, §4.8 (in `summary.md`) |
 | Live answers from a personal knowledge base | Yes — via qmx | D9, §5.7, M5 |
 | On-device transcription when the Spark is unreachable | **No** — home-LAN only, by decision | §1 non-goals |
 

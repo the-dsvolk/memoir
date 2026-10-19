@@ -149,7 +149,7 @@ cd ~/GitHub/the-dsvolk/memoir/server
 ```bash
 cd mac/MemoirKit
 swift build -c release            # → .build/release/memoir
-swift test                        # 13 tests
+swift test                        # 25 tests
 ```
 
 ### 2. Copy the token from the Spark
@@ -232,7 +232,12 @@ The app lives in the **menu bar** (a waveform icon; a red dot while recording) �
   multi-line editor (⌘↩ adds; an entry is stamped with the meeting time when you start typing):
   **Notes** for your notes during the call (`notes.md`), **Prep** to add material as the call goes —
   someone joined, a doc was pasted — appended with its time to `prep.md`. **Stop** ends the call; the
-  overlay then shows where it was saved.
+  overlay then shows the after-the-call steps (next section).
+- **After the call** (in New Call): a checkbox per step of your pipeline — e.g. **Summary** and
+  **Google Doc** — and **Keep local only**. After **Stop** the overlay shows `✓ Saved · ◌ Summary 0:42 ·
+  ○ Google Doc`, then **Open Summary**, **Open Google Doc** and **Copy Link**; a notification says when
+  it's ready (click it to open the doc). The **⋯** menu runs a step again, shows its log or opens the
+  folder. **Recent Calls** in the menu bar does the same for earlier calls.
 - **Settings…** (⌘,): the font and size for transcript and notes; save folder, save audio, server —
   the last three written to `~/.config/memoir/config.toml`, which the CLI reads too.
 
@@ -240,12 +245,57 @@ On first use macOS asks **for Memoir itself** (separately from your terminal): *
 **System Audio Recording** (Privacy & Security › Screen & System Audio Recording › *System Audio
 Recording Only*; restart Memoir after granting) and **Local Network**.
 
+## After the call (pipeline)
+
+Steps that run **on the Mac** once a call is saved — by Memoir.app when you stop, by `memoir listen`
+after Ctrl-C, or any time with `memoir process` (DESIGN.md §4.8). They're listed in
+`~/.config/memoir/pipeline.toml`; the example sets up two:
+
+| Step | Runs | Makes |
+|---|---|---|
+| **Summary** | `uv run python main.py <call>` in `~/GitHub/Cruise/CursorSDKExample`, with `CURSOR_API_KEY` from the Keychain — a Cursor agent | `summary.md` in the call folder: summary, decisions, action items, your notes expanded |
+| **Google Doc** | `~/.claude/skills/md-to-gdoc/create_gdoc.sh <call>/summary.md "<name> — <date>"` | a new Google Doc in My Drive; its link is shown in the app |
+
+### 1. Set it up
+
+```bash
+cp mac/pipeline.example.toml ~/.config/memoir/pipeline.toml
+# The Cursor API key, once, in the login Keychain (it prompts for the key):
+security add-generic-password -a "$USER" -s cursor-api-key -w
+```
+
+Each step runs through **your login shell** (`bash -l` here), so it sees the same PATH as Terminal
+(`uv`, `gcloud`, …) even though the app isn't started from one. Secrets come from the Keychain via
+`security find-generic-password -a "$USER" -s <service> -w` — the same command you'd use by hand.
+
+### 2. Check it
+
+With the CLI from the Mac client build (`mac/MemoirKit/.build/release/memoir`):
+
+```bash
+memoir process ~/memoir/2026-10-18_weekly-sync --list   # steps, what's been done, links
+memoir process ~/memoir/2026-10-18_weekly-sync           # the steps chosen for that call (else the defaults)
+memoir process ~/memoir/2026-10-18_weekly-sync --step gdoc   # one step again (plus what it needs)
+```
+
+Progress goes to stderr, the links to stdout; `-v` shows each step's output live; Ctrl-C cancels.
+Every step logs to `<call>/pipeline/<step>.log`, and `<call>/pipeline/state.json` records how it went.
+A step counts as done only if it exits 0 **and** wrote its `outputs` during that run (an old
+`summary.md` doesn't count). Calls shorter than `min_finals` lines (5) aren't processed automatically.
+
+`memoir listen` records the choice too: `--steps summary,gdoc`, `--keep-local`, or `--no-process`.
+
 ## Privacy
 
 NeMo pulls `wandb` and NVIDIA's `nv-one-logger` telemetry packages. Checked on import: **OneLogger is
 disabled with no exporters** ("No exporters were provided. This means that no telemetry data will be
 collected."). `wandb` stays off with `WANDB_MODE=disabled` — the server and smoke test set it. Audio
 and transcripts stay on the LAN; the server needs the bearer token.
+
+**The pipeline is different:** steps marked `remote = true` send the call off the Mac — Summary sends
+the transcript, prep and notes to Cursor (and its model provider), Google Doc puts the summary in your
+Drive. Untick them, or tick **Keep local only** (`--keep-local`), for calls that must stay local;
+running a remote step on such a call later asks first (`--allow-remote` in the CLI).
 
 ## Verified
 
@@ -267,6 +317,7 @@ and transcripts stay on the LAN; the server needs the bearer token.
 | Soak: 7.4 min in real time (30 × `meeting.wav`) | every repeat word-correct; the server kept pace — `upto` 446.4 s when stopped at 446 s, no backlog (stopped early to free the server for the live test) |
 | **Memoir.app** (2026-10-18) | builds with XcodeGen + `xcodebuild`, no warnings; signed with "Memoire Dev", hardened runtime, `audio-input` entitlement; Info.plist carries the Microphone / System Audio / Local Network texts directly. **Not yet run on a real call.** |
 | Shared core + CLI (2026-10-18) | 13 Swift tests (call folder, `_2` on clashes, rename, config round-trip, transcript model, …) pass |
+| **Pipeline** (2026-10-18) | 25 Swift tests pass (TOML reader, config checks, runner: outputs, links, stale outputs, skipped needs, re-runs, timeout, cancel stops the whole process group, one runner per call). Dry run of `memoir process` from an **empty environment** (as an app gets): Keychain key loaded, `uv` and `gcloud` found through `bash -l`, `cursor_sdk` imports in the CursorSDKExample folder, the printed link kept. **Not yet run end to end from the app.** |
 
 Synthetic test audio (`say`) proves the pipeline; the live-mic run shows it works on a real voice.
 Accuracy on real calls (and the other side's audio) comes with the call tap (M2).
