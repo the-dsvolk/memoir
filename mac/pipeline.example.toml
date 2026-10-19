@@ -28,12 +28,13 @@ remote = true    # sends the transcript to Cursor — off for "Keep local only" 
 default = true   # ticked in New Call
 timeout = 1800
 
-# summary.md → a new Google Doc in My Drive; the script prints the doc's link last.
+# summary.md → a new Google Doc; the script prints the doc's link last. The optional 3rd argument is
+# the Drive folder to put it in (its ID or URL); without it the doc goes to the root of My Drive.
 [[step]]
 id = "gdoc"
 label = "Google Doc"
 needs = ["summary"]
-run = ["~/.claude/skills/md-to-gdoc/create_gdoc.sh", "{call}/summary.md", "{name} — {date}"]
+run = ["~/.claude/skills/md-to-gdoc/create_gdoc.sh", "{call}/summary.md", "{name} — {date}", "<drive-folder-id>"]
 remote = true
 default = true
 timeout = 300

@@ -320,8 +320,11 @@ defaults), skipping finished ones: `--step ID` (again, with what it needs), `--f
 `--allow-remote`, `-v`; Ctrl-C cancels; links go to stdout. `memoir listen` takes `--steps`,
 `--keep-local` and `--no-process`, and runs the pipeline after the call.
 
-**Not yet:** updating an existing Google Doc on a re-run (the script always makes a new one); doc
-folder in Drive; an `enhanced/` folder and provenance (model, prompt version) for each output; steps
+**Docs go into a Drive folder** — `create_gdoc.sh`'s optional 3rd argument (a folder ID or URL), set in
+`pipeline.toml`; here the "Memoir" folder.
+
+**Not yet:** updating an existing Google Doc on a re-run (the script always makes a new one);
+an `enhanced/` folder and provenance (model, prompt version) for each output; steps
 that write back to Jira / Slack (they'd need an approval step).
 
 ## 5. Spark service — ASR, notes, assist (`spark-0e81`)
@@ -752,7 +755,8 @@ fallback.
     provider; Google Doc puts summaries in Drive. Confirm both are approved uses for meeting content,
     and whether Summary and Google Doc should stay ticked by default.
 15. **Re-runs make a new Google Doc** each time (`create_gdoc.sh` only creates). Update the same doc
-    instead (Drive `files.update` with conversion — to verify), and put docs in a "Memoir" folder?
+    instead (Drive `files.update` with conversion — to verify)? (Decided: docs go into a Drive folder,
+    `create_gdoc.sh`'s optional 3rd argument — set in `pipeline.toml`.)
 
 ## Appendix A — changes from the first blueprint
 
