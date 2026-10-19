@@ -61,6 +61,10 @@ struct SettingsView: View {
                     }
                 }
                 Toggle("Save audio (one WAV per source, about 115 MB an hour each)", isOn: $config.saveAudio)
+                Toggle(isOn: $config.echoGate) {
+                    Text("Silence the mic while it only hears the call")
+                    Text("With the microphone and this Mac's audio, the call leaking from your headphones into the mic would show up as Me. Uses what the Mac plays to tell the leak from your voice.")
+                }
                 TextField("Server", text: $config.server)
                 LabeledContent("Token file") { Text(config.tokenFile).foregroundStyle(.secondary) }
                 Text("Shared with the memoir command-line tool: ~/.config/memoir/config.toml")

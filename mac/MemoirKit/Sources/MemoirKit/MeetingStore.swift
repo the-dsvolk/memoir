@@ -125,6 +125,17 @@ public final class MeetingStore: @unchecked Sendable {
         }
     }
 
+    /// How much of the mic the echo gate silenced, and the leak it learned — in `meeting.json`.
+    public func setEchoGate(_ stats: EchoGate.Stats) throws {
+        try lock.withLock {
+            var gate: [String: Any] = ["gated_s": (stats.gatedSeconds * 10).rounded() / 10,
+                                       "mic_s": (stats.micSeconds * 10).rounded() / 10]
+            if let leak = stats.leakDb { gate["leak_db"] = (leak * 10).rounded() / 10 }
+            details["echo_gate"] = gate
+            try writeDetails()
+        }
+    }
+
     /// Ends the record: closes the files and stamps `ended_at` (and the server's backup path).
     public func finish(serverPath: String?) throws {
         try lock.withLock {

@@ -9,9 +9,11 @@ public struct SessionOptions: Sendable {
     public var prep: String  // prep written before the call
     public var input: URL?  // stream this file (as "me") in real time instead of capturing
     public var app: String  // client label stored by the server ("memoir-app", "memoir-cli")
+    /// With mic + system audio: silence the mic while it only hears the call (`EchoGate`).
+    public var echoGate: Bool
 
     public init(server: URL, token: String, sources: [Source], name: String, prep: String = "",
-                input: URL? = nil, app: String) {
+                input: URL? = nil, app: String, echoGate: Bool = true) {
         self.server = server
         self.token = token
         self.sources = sources
@@ -19,6 +21,7 @@ public struct SessionOptions: Sendable {
         self.prep = prep
         self.input = input
         self.app = app
+        self.echoGate = echoGate
     }
 }
 
@@ -39,6 +42,9 @@ public final class MeetingSession: @unchecked Sendable {
     /// Called with every captured chunk (16 kHz mono) — e.g. to save audio. Set before `start()`.
     public var onAudio: (@Sendable (Source, [Int16]) -> Void)?
 
+    /// The echo gate in use (mic + system audio with `echoGate` on), for its stats at the end.
+    public let echoGate: EchoGate?
+
     private let client: StreamClient
     private let lock = NSLock()
     private var captures: [Capture] = []
@@ -49,6 +55,8 @@ public final class MeetingSession: @unchecked Sendable {
     public init(options: SessionOptions) {
         self.options = options
         client = StreamClient(url: options.server, token: options.token)
+        let both = options.sources.contains(.me) && options.sources.contains(.them)
+        echoGate = options.echoGate && both && options.input == nil ? EchoGate() : nil
     }
 
     /// Seconds since the server said `ready` — the meeting clock used for note timestamps.
@@ -96,7 +104,7 @@ public final class MeetingSession: @unchecked Sendable {
             lock.withLock { fileTask = task }
         } else {
             do {
-                let captures = try await Capture.start(options.sources)
+                let captures = try await Capture.start(options.sources, echoGate: echoGate)
                 lock.withLock { self.captures = captures }
                 emit.yield(.capturing(captures.map(\.description)))
                 Task { await self.pump(captures, logs: logs, emit: emit) }
@@ -259,18 +267,24 @@ struct Capture: Sendable {
     let description: String
     let stop: @Sendable () -> Void
 
-    static func start(_ sources: [Source]) async throws -> [Capture] {
+    /// With `echoGate`, the mic goes through it and the system audio feeds it.
+    static func start(_ sources: [Source], echoGate: EchoGate? = nil) async throws -> [Capture] {
         var captures: [Capture] = []
         if sources.contains(.me) || sources.contains(.room) {  // mic first: AirPods can stay in A2DP otherwise
             guard await MicCapture.requestAccess() else { throw MemoirError.microphoneDenied }
-            let mic = MicCapture()
+            var process: (@Sendable ([Int16], Double) -> [Int16])?
+            if let echoGate { process = { samples, time in echoGate.near(samples, at: time) } }
+            let mic = MicCapture(process: process)
             let source: Source = sources.contains(.room) ? .room : .me
+            let gated = echoGate == nil ? "" : ", echo gate on"
             captures.append(Capture(source: source, chunks: try mic.start(),
-                                    description: "the microphone (\(MicCapture.defaultInputName)) as \(source.label)",
+                                    description: "the microphone (\(MicCapture.defaultInputName)) as \(source.label)\(gated)",
                                     stop: { mic.stop() }))
         }
         if sources.contains(.them) {
-            let system = SystemAudioCapture()
+            var observe: (@Sendable ([Int16], Double) -> Void)?
+            if let echoGate { observe = { samples, time in echoGate.far(samples, at: time) } }
+            let system = SystemAudioCapture(observe: observe)
             let chunks = try system.start()
             captures.append(Capture(source: .them, chunks: chunks,
                                     description: "system audio (\(system.outputDeviceName), \(system.tapFormat)) as Them",
