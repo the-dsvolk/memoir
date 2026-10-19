@@ -103,7 +103,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     data = json.loads(msg["text"])
                     if data.get("type") == "stop":
                         break
-                    if data.get("type") == "note":
+                    if data.get("type") in ("note", "prep", "meta"):  # in-call notes, prep, renames
                         store.append(data)
         except WebSocketDisconnect:
             connected = False

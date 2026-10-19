@@ -1,0 +1,54 @@
+# XcodeGen spec for Memoir.app — `xcodegen` here generates Memoir.xcodeproj (not committed).
+name: Memoir
+options:
+  bundleIdPrefix: io.github.the-dsvolk
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  MemoirKit:
+    path: ../MemoirKit
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+targets:
+  Memoir:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: MemoirKit
+        product: MemoirKit
+    info:
+      # Written directly into Info.plist — the INFOPLIST_KEY_ build settings reportedly drop
+      # NSAudioCaptureUsageDescription (DESIGN.md §4.6).
+      path: Generated/Info.plist
+      properties:
+        CFBundleName: Memoir
+        CFBundleDisplayName: Memoir
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "26.0"
+        LSUIElement: true  # menu-bar app, no Dock icon
+        NSMicrophoneUsageDescription: Memoir transcribes your voice during calls and meetings.
+        NSAudioCaptureUsageDescription: Memoir transcribes the call audio playing on this Mac.
+        NSLocalNetworkUsageDescription: Memoir streams audio to your transcription server on the local network.
+    entitlements:
+      path: Generated/Memoir.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.the-dsvolk.memoir
+        PRODUCT_NAME: Memoir
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Memoire Dev"  # stable identity, so permission grants survive rebuilds
+        DEVELOPMENT_TEAM: ""
+        ENABLE_HARDENED_RUNTIME: YES
+        # One binary in Debug too: Xcode's split-out Memoir.debug.dylib (for SwiftUI previews) is
+        # refused at launch under hardened runtime — a self-signed identity has no Team ID (INSTALL.md #7).
+        ENABLE_DEBUG_DYLIB: NO
+        ENABLE_APP_SANDBOX: NO
+        GENERATE_INFOPLIST_FILE: NO

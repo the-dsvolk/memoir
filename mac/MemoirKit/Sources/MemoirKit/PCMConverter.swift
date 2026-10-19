@@ -7,6 +7,8 @@ public enum MemoirError: Error, CustomStringConvertible {
     case server(code: String, message: String)
     case unexpectedMessage
     case coreAudio(what: String, status: OSStatus)
+    case missingToken(String)
+    case localNetworkBlocked(String)
 
     public var description: String {
         switch self {
@@ -16,6 +18,10 @@ public enum MemoirError: Error, CustomStringConvertible {
         case .server(let code, let message): "server error \(code): \(message)"
         case .unexpectedMessage: "unexpected message from the server"
         case .coreAudio(let what, let status): "Core Audio couldn't \(what) (OSStatus \(status))"
+        case .missingToken(let path): "no server token at \(path) — copy ~/.config/memoir/token from spark-0e81 (INSTALL.md)"
+        case .localNetworkBlocked(let host): "can't reach \(host): macOS reports no network for this app — if the server is on "
+            + "your LAN, allow Local Network access for it (or your terminal app) in System Settings › Privacy & Security › "
+            + "Local Network, then restart it"
         }
     }
 }
