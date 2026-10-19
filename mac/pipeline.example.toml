@@ -1,0 +1,42 @@
+# memoir post-processing — steps that run on this Mac after a call (DESIGN.md §4.8).
+# Install: cp mac/pipeline.example.toml ~/.config/memoir/pipeline.toml
+# Read by Memoir.app (New Call › "After the call") and by `memoir listen` / `memoir process <call-folder>`.
+#
+# Each step runs through your login shell (`bash -l` / `zsh -l`), so it gets the same PATH as Terminal,
+# in `cwd` (default: the call folder). In `run`, `cwd` and `env`: {call} = the call folder,
+# {folder} = its name, {name} = the call's name, {date} = YYYY-MM-DD; a leading ~/ is expanded.
+#
+# A step succeeds if it exits 0 and (re)wrote every file in `outputs`. If the last line it prints is a
+# link (e.g. the new Google Doc), the app shows Open / Copy Link for it. Output and errors go to
+# <call>/pipeline/<id>.log; progress is in <call>/pipeline/state.json.
+
+min_finals = 5  # calls with fewer finished lines aren't processed automatically
+
+# Summary, decisions, action items and expanded notes → <call>/summary.md, written by a Cursor agent.
+# The same as running, in Terminal:
+#   cd ~/GitHub/Cruise/CursorSDKExample
+#   export CURSOR_API_KEY="$(security find-generic-password -a "$USER" -s cursor-api-key -w)"
+#   uv run python main.py <call-folder>
+[[step]]
+id = "summary"
+label = "Summary"
+description = "A Cursor agent writes summary.md: the summary, decisions, action items, and your notes expanded and checked against the transcript."
+cwd = "~/GitHub/Cruise/CursorSDKExample"
+run = ["uv", "run", "python", "main.py", "{call}"]
+keychain = { CURSOR_API_KEY = "cursor-api-key" }  # login Keychain, account = your user
+outputs = ["summary.md"]
+remote = true    # sends the transcript to Cursor — off for "Keep local only" calls
+default = true   # ticked in New Call
+timeout = 1800
+
+# summary.md → a new Google Doc; the script prints the doc's link last. The optional 3rd argument is
+# the Drive folder to put it in (its ID or URL); without it the doc goes to the root of My Drive.
+[[step]]
+id = "gdoc"
+label = "Google Doc"
+description = "Turns summary.md into a Google Doc in your Drive folder, in your house style; the app shows its link."
+needs = ["summary"]
+run = ["~/.claude/skills/md-to-gdoc/create_gdoc.sh", "{call}/summary.md", "{name} — {date}", "<drive-folder-id>"]
+remote = true
+default = true
+timeout = 300

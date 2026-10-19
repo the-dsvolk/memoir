@@ -12,8 +12,9 @@ import sys
 import time
 
 os.environ.setdefault("WANDB_MODE", "disabled")
-# memoir's own model cache: ~/.cache/huggingface/hub on spark-0e81 is root-owned (Docker runs).
+# memoir's own caches: ~/.cache/huggingface/hub and ~/.triton/cache on spark-0e81 are root-owned (Docker runs).
 os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/memoir/huggingface"))
+os.environ.setdefault("TRITON_CACHE_DIR", os.path.expanduser("~/.cache/memoir/triton"))
 
 import torch  # noqa: E402
 from huggingface_hub import hf_hub_download  # noqa: E402
