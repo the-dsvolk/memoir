@@ -1,0 +1,25 @@
+[project]
+name = "memoir-asr"
+version = "0.0.1"
+description = "memoir ASR server — Nemotron Speech Streaming EN 0.6B on the DGX Spark (spark-0e81)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch==2.11.0",               # CUDA 13.0 build, from the pytorch-cu130 index below
+    "nemo-toolkit[asr]==3.0.0",
+    "silero-vad==6.2.3",
+    "fastapi",
+    "uvicorn[standard]",
+]
+
+[tool.uv]
+package = false                     # no importable package yet (M0); scripts run with `uv run`
+# The server only runs on the Spark (Linux aarch64); the cu130 index has no macOS wheels.
+environments = ["sys_platform == 'linux' and platform_machine == 'aarch64'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true                     # only packages mapped above come from here
