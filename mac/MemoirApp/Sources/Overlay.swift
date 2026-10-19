@@ -49,6 +49,8 @@ struct OverlayView: View {
                     .textFieldStyle(.plain)
                     .font(.headline)
                     .onSubmit { model.rename(to: name) }
+                    .disabled(!model.isRecording && model.isBusy(model.folder))  // a step is working in its folder
+                    .help(!model.isRecording && model.isBusy(model.folder) ? "Can be renamed once processing finishes" : "")
                 Spacer()
                 if let startedAt = model.startedAt, model.isRecording {
                     TimelineView(.periodic(from: startedAt, by: 1)) { context in
@@ -102,12 +104,9 @@ struct OverlayView: View {
                 }
             }
 
-            if !model.isRecording, !model.lastSummary.isEmpty, let folder = model.folder {
-                HStack {
-                    Text("Saved to \(folder.lastPathComponent)").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Open Folder") { model.open(folder) }.controlSize(.small)
-                }
+            if !model.isRecording, let folder = model.folder, FileManager.default.fileExists(atPath: folder.path) {
+                Divider()
+                PostCallBar(model: model, folder: folder)  // saved, then each pipeline step (DESIGN.md §4.8)
             }
         }
         .padding(12)

@@ -45,6 +45,27 @@ struct SettingsView: View {
                     Text(saveError).font(.caption).foregroundStyle(.red)
                 }
             }
+            Section("After the call") {
+                LabeledContent("Pipeline") {
+                    HStack {
+                        Text(PipelineConfig.defaultPath).foregroundStyle(.secondary)
+                        Button("Show in Finder") { revealPipeline() }
+                        Button("Reload") { model.loadPipeline() }
+                    }
+                }
+                if let pipeline = model.pipeline {
+                    ForEach(pipeline.steps) { step in
+                        LabeledContent(step.label) {
+                            Text(describe(step)).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
+                        }
+                    }
+                } else {
+                    Text(model.pipelineError ?? "No pipeline yet — copy mac/pipeline.example.toml there (INSTALL.md)")
+                        .font(.caption).foregroundStyle(model.pipelineError == nil ? Color.secondary : Color.red)
+                }
+                Text("Shared with `memoir process`. Steps run on this Mac through your login shell; their logs are in each call's pipeline folder.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 520)
@@ -57,6 +78,20 @@ struct SettingsView: View {
             } catch {
                 saveError = "Couldn't save settings: \(error.localizedDescription)"
             }
+        }
+    }
+
+    private func describe(_ step: PipelineStep) -> String {
+        let flags = [step.remote ? "sends the call off this Mac" : "local", step.enabledByDefault ? "on by default" : "off by default"]
+        return step.run.joined(separator: " ") + " — " + flags.joined(separator: ", ")
+    }
+
+    private func revealPipeline() {
+        let url = URL(fileURLWithPath: MemoirConfig.expand(PipelineConfig.defaultPath))
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            model.open(url.deletingLastPathComponent())
         }
     }
 

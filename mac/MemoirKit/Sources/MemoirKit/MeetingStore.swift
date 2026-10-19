@@ -30,8 +30,9 @@ public final class MeetingStore: @unchecked Sendable {
         let text: String
     }
 
+    /// `postprocess`: what to run after the call (DESIGN.md §4.8), kept in `meeting.json`.
     public init(saveDir: URL, name: String, prep: String = "", sources: [Source], client: String,
-                saveAudio: Bool = false, startedAt: Date = Date()) throws {
+                saveAudio: Bool = false, postprocess: PostprocessChoice? = nil, startedAt: Date = Date()) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: saveDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         self.saveDir = saveDir
@@ -41,6 +42,7 @@ public final class MeetingStore: @unchecked Sendable {
         self.client = client
         self.saveAudio = saveAudio
         self.startedAt = startedAt
+        if let postprocess { details["postprocess"] = postprocess.json }
         folder = Self.uniqueFolder(in: saveDir, date: startedAt, name: name)
         try fm.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
 

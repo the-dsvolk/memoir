@@ -3,7 +3,7 @@ import MemoirKit
 import Observation
 
 /// The app's state: one call at a time, run by `MeetingSession` and recorded by `MeetingStore` — the
-/// same core the CLI uses (D13).
+/// same core the CLI uses (D13) — then the after-the-call pipeline on finished calls (DESIGN.md §4.8).
 @MainActor
 @Observable
 final class AppModel {
@@ -16,6 +16,20 @@ final class AppModel {
         let id = UUID()
         let t: Double  // meeting clock, seconds
         let text: String
+    }
+
+    /// Pipeline steps to run on one call; jobs run one at a time.
+    struct PipelineJob: Equatable {
+        let folder: URL
+        let steps: [String]
+        let force: Bool
+        let title: String
+    }
+
+    struct RecentCall: Identifiable {
+        let info: CallInfo
+        let state: PipelineState?
+        var id: String { info.id }
     }
 
     var status: Status = .idle
@@ -34,12 +48,35 @@ final class AppModel {
     var quickNotes: [QuickNote] = []
     var prepAdditions: [QuickNote] = []  // prep added during the call (append-only, timestamped)
 
+    // After the call (DESIGN.md §4.8)
+    var pipeline: PipelineConfig?
+    var pipelineError: String?
+    /// What the current (or last) call runs when it stops — chosen in New Call.
+    var choice = PostprocessChoice(steps: [])
+    /// Live pipeline state, by call folder path.
+    var pipelineStates: [String: PipelineState] = [:]
+    /// Calls not processed automatically because they were short: folder path → finished lines.
+    var tooShort: [String: Int] = [:]
+    /// Jobs that couldn't start (no pipeline, already running elsewhere…): folder path → why.
+    var processingErrors: [String: String] = [:]
+    var activeJob: PipelineJob?
+    var queue: [PipelineJob] = []
+    var recentCalls: [RecentCall] = []
+
     /// The meeting clock (seconds since the server said ready), for note timestamps.
     var elapsed: Double { session?.elapsed ?? 0 }
 
     @ObservationIgnored private var session: MeetingSession?
     @ObservationIgnored private var store: MeetingStore?
+    @ObservationIgnored private var lastStore: MeetingStore?  // the finished call, for renaming it afterwards
+    @ObservationIgnored private var runner: PipelineRunner?
     @ObservationIgnored private let overlay = OverlayController()
+
+    init() {
+        Notifier.shared.start()
+        loadPipeline()
+        refreshRecent()
+    }
 
     var isRecording: Bool { [.connecting, .waitingForNetwork, .live, .stopping].contains(status) }
 
@@ -51,12 +88,13 @@ final class AppModel {
         }
     }
 
-    func start(name: String, prep: String, source: String) async {
+    func start(name: String, prep: String, source: String, choice: PostprocessChoice? = nil) async {
         guard !isRecording else { return }
         self.source = source
         UserDefaults.standard.set(source, forKey: "source")
         callName = name
         self.prep = prep
+        if let choice { self.choice = choice }
         transcript.clear()
         quickNotes.removeAll()
         prepAdditions.removeAll()
@@ -72,7 +110,8 @@ final class AppModel {
             guard let server = URL(string: config.server) else { throw AppError("bad server URL \(config.server)") }
             let token = try config.token()
             let newStore = try MeetingStore(saveDir: config.saveDirectory, name: name, prep: prep,
-                                            sources: sources, client: "memoir-app", saveAudio: config.saveAudio)
+                                            sources: sources, client: "memoir-app", saveAudio: config.saveAudio,
+                                            postprocess: pipeline == nil ? nil : self.choice)
             store = newStore
             self.store = newStore
             folder = newStore.folder
@@ -127,14 +166,26 @@ final class AppModel {
         session.stop()
     }
 
+    /// Renames the call — during it, or after it (not while a step is working in its folder).
     func rename(to name: String) {
-        guard name != callName else { return }
+        guard name != callName, store != nil || !isBusy(folder) else { return }
         callName = name
-        guard let store else { return }
+        guard let store = store ?? lastStore else { return }
+        let old = store.folder.path
         try? store.rename(to: name)
         folder = store.folder
-        let session = session
-        Task { try? await session?.sendRename(to: name) }
+        let new = store.folder.path
+        if new != old {
+            pipelineStates[new] = pipelineStates.removeValue(forKey: old)
+            tooShort[new] = tooShort.removeValue(forKey: old)
+            processingErrors[new] = processingErrors.removeValue(forKey: old)
+        }
+        if self.store != nil {
+            let session = session
+            Task { try? await session?.sendRename(to: name) }
+        } else {
+            refreshRecent()
+        }
     }
 
     /// Adds a quick note, stamped at `t` (when typing began) or now.
@@ -174,6 +225,13 @@ final class AppModel {
     }
 
     func quit() {
+        if let job = activeJob {
+            guard confirm("Processing “\(job.title)” isn't finished",
+                          detail: "Quitting stops it. You can run it again later from Recent Calls.", button: "Quit")
+            else { return }
+            queue.removeAll()
+            runner?.cancel()  // SIGTERM to the step now; it shows as interrupted next time
+        }
         guard isRecording else { NSApp.terminate(nil); return }
         stop()
         Task {  // give the server a moment to flush the last words into the record
@@ -198,7 +256,9 @@ final class AppModel {
         case .stopped(let serverPath, let latency):
             try? store?.finish(serverPath: serverPath)
             lastSummary = latency.summary
+            let folder = store?.folder
             finish(.idle)
+            if let folder { afterCall(folder) }
         case .failed(let message):
             try? store?.finish(serverPath: nil)
             finish(.failed(message))
@@ -208,7 +268,153 @@ final class AppModel {
     private func finish(_ final: Status) {
         status = final
         session = nil
+        if let store { lastStore = store }
         store = nil
+        refreshRecent()
+    }
+
+    // MARK: - After the call (DESIGN.md §4.8)
+
+    func loadPipeline() {
+        do {
+            pipeline = try PipelineConfig.load()
+            pipelineError = nil
+        } catch {
+            pipeline = nil
+            pipelineError = String(describing: error)
+        }
+    }
+
+    /// Runs the steps chosen in New Call — unless the call was too short to be worth it.
+    private func afterCall(_ folder: URL) {
+        guard let pipeline, !choice.steps.isEmpty else { return }
+        let finals = (try? CallInfo.load(folder))?.finals ?? 0
+        guard finals >= pipeline.minFinals else {
+            tooShort[folder.path] = finals
+            return
+        }
+        process(folder, steps: choice.steps)
+    }
+
+    /// Steps the call was set up with (else the pipeline's defaults) — what "Run All" and Retry run.
+    func chosenSteps(for folder: URL) -> [String] {
+        let info = try? CallInfo.load(folder)
+        if let steps = info?.postprocess?.steps, !steps.isEmpty { return steps }
+        return pipeline?.defaultSteps(keepLocal: info?.postprocess?.keepLocal ?? false) ?? []
+    }
+
+    /// Runs `steps` on a call from the menus, checking first if remote steps would undo "Keep local only".
+    func run(_ steps: [String], on folder: URL, force: Bool) {
+        let info = try? CallInfo.load(folder)
+        if info?.postprocess?.keepLocal == true, let pipeline {
+            let remote = pipeline.selection(steps).compactMap(pipeline.step).filter(\.remote)
+            if !remote.isEmpty, !confirm("“\(info?.title ?? folder.lastPathComponent)” is marked Keep local only",
+                                         detail: "\(remote.map(\.label).joined(separator: " and ")) sends it off this Mac.",
+                                         button: "Run Anyway") {
+                return
+            }
+        }
+        process(folder, steps: steps, force: force)
+    }
+
+    /// Queues a job; jobs run one at a time.
+    func process(_ folder: URL, steps: [String], force: Bool = false) {
+        guard !steps.isEmpty, !isBusy(folder) else { return }
+        tooShort[folder.path] = nil
+        processingErrors[folder.path] = nil
+        let title = (try? CallInfo.load(folder))?.title ?? folder.lastPathComponent
+        queue.append(PipelineJob(folder: folder, steps: steps, force: force, title: title))
+        runNext()
+    }
+
+    func cancelProcessing(_ folder: URL) {
+        queue.removeAll { $0.folder == folder }
+        if activeJob?.folder == folder { runner?.cancel() }
+    }
+
+    /// A job for this call is queued or running.
+    func isBusy(_ folder: URL?) -> Bool {
+        guard let folder else { return false }
+        return activeJob?.folder == folder || queue.contains { $0.folder == folder }
+    }
+
+    /// The steps a queued or running job will run on `folder` (to show them before they start).
+    func plannedSteps(_ folder: URL) -> [String] {
+        guard let job = activeJob?.folder == folder ? activeJob : queue.first(where: { $0.folder == folder }) else { return [] }
+        return pipeline?.selection(job.steps) ?? job.steps
+    }
+
+    private func runNext() {
+        guard activeJob == nil, !queue.isEmpty else { return }
+        let job = queue.removeFirst()
+        activeJob = job
+        loadPipeline()  // pick up edits to pipeline.toml
+        let key = job.folder.path
+        guard let pipeline else {
+            processingErrors[key] = pipelineError ?? "no pipeline: add ~/.config/memoir/pipeline.toml (INSTALL.md)"
+            activeJob = nil
+            runNext()
+            return
+        }
+        let runner = PipelineRunner(config: pipeline, call: job.folder)
+        self.runner = runner
+        Task {
+            do {
+                let state = try await runner.run(steps: job.steps, force: job.force) { state in
+                    Task { @MainActor in self.show(state, for: key) }
+                }
+                show(state, for: key)
+                notify(job, state, pipeline)
+            } catch {
+                processingErrors[key] = String(describing: error)
+            }
+            self.runner = nil
+            activeJob = nil
+            refreshRecent()
+            runNext()
+        }
+    }
+
+    /// Updates arrive on the main actor out of order at worst: keep the newest.
+    private func show(_ state: PipelineState, for key: String) {
+        if let current = pipelineStates[key]?.updatedAt, let new = state.updatedAt, new < current { return }
+        pipelineStates[key] = state
+    }
+
+    private func notify(_ job: PipelineJob, _ state: PipelineState, _ pipeline: PipelineConfig) {
+        let steps = pipeline.selection(job.steps).compactMap { id in pipeline.step(id).flatMap { s in state.steps[id].map { (s, $0) } } }
+        if let (step, failed) = steps.first(where: { $0.1.status == .failed }) {
+            Notifier.shared.post(title: "\(step.label) failed — \(job.title)", body: failed.message ?? "",
+                                 open: PipelineState.log(job.folder, step: step.id))
+        } else if steps.allSatisfy({ $0.1.status == .ok }) {
+            let link = steps.last(where: { $0.1.url != nil }).flatMap { $0.1.url.flatMap(URL.init(string:)) }
+            let file = steps.last(where: { !($0.1.outputs ?? []).isEmpty })
+                .map { job.folder.appendingPathComponent($0.1.outputs![0]) }
+            Notifier.shared.post(title: "“\(job.title)” is ready",
+                                 body: steps.map(\.0.label).joined(separator: ", ") + (link != nil ? " — click to open" : ""),
+                                 open: link ?? file)
+        }
+    }
+
+    func refreshRecent() {
+        recentCalls = CallInfo.recent(in: config.saveDirectory, limit: 8).map {
+            RecentCall(info: $0, state: pipelineStates[$0.id] ?? PipelineState.load($0.folder))
+        }
+    }
+
+    func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func confirm(_ message: String, detail: String, button: String) -> Bool {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: button)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }
 

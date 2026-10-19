@@ -9,6 +9,8 @@ struct NewCallView: View {
     @State private var name = ""
     @State private var prep = ""
     @State private var source = "mic+system"
+    @State private var steps: Set<String> = []  // after the call (DESIGN.md §4.8)
+    @State private var keepLocal = false
     @AppStorage(TextAppearance.fontKey) private var fontName = ""
     @AppStorage(TextAppearance.sizeKey) private var fontSize = TextAppearance.defaultSize
 
@@ -38,6 +40,10 @@ struct NewCallView: View {
                         .truncationMode(.middle)
                         .lineLimit(1)
                         .textSelection(.enabled)
+                }
+                GridRow(alignment: .firstTextBaseline) {
+                    Text("After the call")
+                    afterTheCall
                 }
             }
 
@@ -81,7 +87,59 @@ struct NewCallView: View {
             name = ""
             prep = ""
             source = model.source
+            model.loadPipeline()
+            steps = Set(model.pipeline?.defaultSteps() ?? [])
+            keepLocal = false
         }
+    }
+
+    /// One checkbox per pipeline step, and "Keep local only" (DESIGN.md §4.8).
+    @ViewBuilder private var afterTheCall: some View {
+        if let pipeline = model.pipeline, !pipeline.steps.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 16) {
+                    ForEach(pipeline.steps) { step in
+                        Toggle(step.label, isOn: binding(step, in: pipeline))
+                            .disabled(keepLocal && step.remote)
+                    }
+                    Toggle("Keep local only", isOn: $keepLocal)
+                        .help("Nothing from this call leaves the Mac: steps that send it elsewhere are off")
+                }
+                Text(afterTheCallHint(pipeline))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } else if let error = model.pipelineError {
+            Text(error).font(.caption).foregroundStyle(.red).lineLimit(3)
+        } else {
+            Text("Nothing — steps go in ~/.config/memoir/pipeline.toml (INSTALL.md)")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Ticking a step ticks what it needs; unticking one unticks what needs it.
+    private func binding(_ step: PipelineStep, in pipeline: PipelineConfig) -> Binding<Bool> {
+        Binding(
+            get: { steps.contains(step.id) && !(keepLocal && step.remote) },
+            set: { on in
+                if on {
+                    steps.formUnion(pipeline.selection([step.id]))
+                } else {
+                    steps.remove(step.id)
+                    steps.subtract(pipeline.dependents(of: step.id))
+                }
+            })
+    }
+
+    private func afterTheCallHint(_ pipeline: PipelineConfig) -> String {
+        let chosen = pipeline.selection(Array(steps), keepLocal: keepLocal).compactMap { pipeline.step($0) }
+        if chosen.isEmpty { return keepLocal ? "Nothing leaves this Mac; nothing runs after the call." : "Nothing runs after the call." }
+        let remote = chosen.contains(where: \.remote)
+        return "When you stop: " + chosen.map(\.label).joined(separator: " → ")
+            + (remote ? ". This sends the call off this Mac." : ", on this Mac.")
+    }
+
+    private var choice: PostprocessChoice {
+        PostprocessChoice(steps: model.pipeline?.selection(Array(steps), keepLocal: keepLocal) ?? [], keepLocal: keepLocal)
     }
 
     private var folderPreview: String {
@@ -91,7 +149,7 @@ struct NewCallView: View {
 
     private func start() {
         dismissWindow(id: "new-call")
-        let (name, prep, source) = (name, prep, source)
-        Task { await model.start(name: name, prep: prep, source: source) }
+        let (name, prep, source, choice) = (name, prep, source, choice)
+        Task { await model.start(name: name, prep: prep, source: source, choice: choice) }
     }
 }
