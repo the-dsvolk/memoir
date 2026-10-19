@@ -4,6 +4,7 @@ import SwiftUI
 struct MenuView: View {
     let model: AppModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         if model.isRecording {
@@ -39,7 +40,7 @@ struct MenuView: View {
             }
         }
         Button("Open Save Folder") { model.open(nil) }
-        SettingsLink { Text("Settings…") }
+        Button("Settings…") { model.showSettings(openSettings) }
             .keyboardShortcut(",")
         Divider()
         Button("Quit Memoir") { model.quit() }

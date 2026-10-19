@@ -1,6 +1,7 @@
 import AppKit
 import MemoirKit
 import Observation
+import SwiftUI
 
 /// The app's state: one call at a time, run by `MeetingSession` and recorded by `MeetingStore` — the
 /// same core the CLI uses (D13) — then the after-the-call pipeline on finished calls (DESIGN.md §4.8).
@@ -220,6 +221,37 @@ final class AppModel {
     func toggleOverlay() {
         if overlayVisible { overlay.hide() } else { overlay.show(model: self) }
         overlayVisible.toggle()
+    }
+
+    /// Opens Settings in front of every other app, on the screen the pointer is on, and keeps it above
+    /// other windows while it's open (a menu-bar app's windows otherwise open behind the active app).
+    func showSettings(_ openSettings: OpenSettingsAction) {
+        NSApp.activate()
+        openSettings()
+        bringToFront(where: { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || $0.title.hasSuffix("Settings") },
+                     floating: true)
+    }
+
+    /// Waits for the window to exist (SwiftUI makes it on first open), then floats it, moves it to the
+    /// pointer's screen (if it's on another one) and the current Space, and brings it forward.
+    private func bringToFront(where match: @escaping (NSWindow) -> Bool, floating: Bool, attempt: Int = 0) {
+        guard let window = NSApp.windows.first(where: match) else {
+            guard attempt < 20 else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(50))
+                bringToFront(where: match, floating: floating, attempt: attempt + 1)
+            }
+            return
+        }
+        if floating { window.level = .floating }
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        let mouse = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }), window.screen != screen {
+            let area = screen.visibleFrame
+            window.setFrameOrigin(NSPoint(x: area.midX - window.frame.width / 2, y: area.midY - window.frame.height / 2))
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     func open(_ url: URL?) {
