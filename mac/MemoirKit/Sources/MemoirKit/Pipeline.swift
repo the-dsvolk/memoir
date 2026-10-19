@@ -6,6 +6,8 @@ public struct PipelineStep: Sendable, Equatable, Identifiable {
     public var id: String
     /// Shown in the app: "Summary", "Google Doc".
     public var label: String
+    /// What it does, in a sentence — shown in Settings instead of the command.
+    public var description: String?
     /// argv; `{call}`, `{folder}`, `{name}` and `{date}` are filled in, a leading `~/` is expanded.
     public var run: [String]
     /// Working directory (default: the call folder).
@@ -132,7 +134,7 @@ public struct PipelineConfig: Sendable, Equatable {
     private static func step(_ t: [String: TOMLValue], number: Int) throws -> PipelineStep {
         let name = t["id"]?.string ?? "step \(number)"
         try checkKeys(t, allowed: ["id", "label", "run", "cwd", "needs", "outputs", "env", "keychain", "timeout",
-                                   "remote", "default"], in: name)
+                                   "remote", "default", "description"], in: name)
         guard let id = t["id"]?.string, !id.isEmpty,
               id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else {
             throw PipelineConfigError("\(name): id must be letters, digits, - or _")
@@ -140,6 +142,7 @@ public struct PipelineConfig: Sendable, Equatable {
         let run = try strings(t["run"], "run", in: id)
         guard !run.isEmpty else { throw PipelineConfigError("\(id): run needs a command") }
         var step = PipelineStep(id: id, label: try t["label"].map { try string($0, "label", in: id) }, run: run)
+        step.description = try t["description"].map { try string($0, "description", in: id) }
         step.cwd = try t["cwd"].map { try string($0, "cwd", in: id) }
         step.needs = try strings(t["needs"], "needs", in: id)
         step.outputs = try strings(t["outputs"], "outputs", in: id)

@@ -101,6 +101,7 @@ struct NewCallView: View {
                     ForEach(pipeline.steps) { step in
                         Toggle(step.label, isOn: binding(step, in: pipeline))
                             .disabled(keepLocal && step.remote)
+                            .help(step.description ?? "")
                     }
                     Toggle("Keep local only", isOn: $keepLocal)
                         .help("Nothing from this call leaves the Mac: steps that send it elsewhere are off")

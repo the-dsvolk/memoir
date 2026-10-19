@@ -281,7 +281,9 @@ run = ["~/.claude/skills/md-to-gdoc/create_gdoc.sh", "{call}/summary.md", "{name
 in; `cwd` defaults to the call folder; `needs` orders them (a small DAG — loops and unknown names are
 rejected when the file is read); `env` and `keychain` add environment variables, the latter read with
 `security find-generic-password`, so no secret sits in the file. `remote` (default **true**, the safe
-side) marks a step that sends the call elsewhere; `default` ticks it in New Call.
+side) marks a step that sends the call elsewhere; `default` ticks it in New Call; `description` (a
+sentence) is what Settings › After the call shows for it — numbered in run order, with *after …*,
+**Remote** / **Local** and default badges, and the exact command folded away under *Command*.
 
 **Running a step** (`PipelineRunner` in `MemoirKit`):
 

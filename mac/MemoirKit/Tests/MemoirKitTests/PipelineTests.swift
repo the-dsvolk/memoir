@@ -63,6 +63,7 @@ private let twoSteps = """
     [[step]]
     id = "summary"
     label = "Summary"
+    description = "Writes summary.md"
     run = ["summarize", "{call}"]
     cwd = "~/somewhere"
     outputs = ["summary.md"]
@@ -82,6 +83,8 @@ private let twoSteps = """
     #expect(config.loginShell == false)
     let summary = try #require(config.step("summary"))
     #expect(summary.label == "Summary")
+    #expect(summary.description == "Writes summary.md")
+    #expect(config.step("doc")?.description == nil)
     #expect(summary.keychain == ["API_KEY": "api-key"])
     #expect(summary.timeout == 60)
     #expect(summary.remote)  // remote unless a step says otherwise
