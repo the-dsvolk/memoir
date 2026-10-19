@@ -239,6 +239,32 @@ private func pipeline(_ steps: PipelineStep...) throws -> PipelineConfig {
     #expect(!PipelineRunner.isBusy(call))
 }
 
+@Test func runnerStopsWhatAStepLeavesRunning() async throws {
+    let call = try makeCall()
+    defer { try? FileManager.default.removeItem(at: call.deletingLastPathComponent()) }
+    // Like the Cursor SDK's bridge under `uv`: a process in another process group that outlives the step.
+    let escape = #"perl -e 'setpgrp(0,0); open(F, ">escaped.pid"); print F $$; close F; exec "sleep", "60"' "#
+        + "</dev/null >/dev/null 2>&1 & sleep 1; echo done"
+    let config = try pipeline(sh("leaky", escape))
+    let state = try await PipelineRunner(config: config, call: call).run(steps: ["leaky"])
+    #expect(state.steps["leaky"]?.status == .ok)
+    let pid = try #require(Int32(try String(contentsOf: call.appendingPathComponent("escaped.pid"), encoding: .utf8)))
+    var gone = false
+    for _ in 0 ..< 20 where !gone {
+        gone = kill(pid, 0) != 0
+        if !gone { try await Task.sleep(for: .milliseconds(100)) }
+    }
+    #expect(gone)
+}
+
+@Test func transcriptLoadsFromTheCallFolder() throws {
+    let call = try makeCall()
+    defer { try? FileManager.default.removeItem(at: call.deletingLastPathComponent()) }
+    let lines = TranscriptModel.load(call).lines
+    #expect(lines.map(\.text) == ["Hello."])
+    #expect(lines.allSatisfy { $0.isFinal })
+}
+
 @Test func runnerRefusesFoldersThatAreNotCalls() async throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("memoir-not-a-call-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

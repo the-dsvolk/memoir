@@ -8,7 +8,7 @@ struct MemoirApp: App {
         MenuBarExtra {
             MenuView(model: model)
         } label: {
-            Image(systemName: model.isRecording ? "record.circle.fill" : "waveform")
+            Image(systemName: model.isRecording ? "record.circle.fill" : model.activeJob != nil ? "hourglass" : "waveform")
         }
 
         Window("New Call", id: "new-call") {

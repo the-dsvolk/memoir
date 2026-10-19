@@ -116,6 +116,7 @@ public final class PipelineRunner: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
     private var child: pid_t = 0
+    private var tracked: StepProcesses?
 
     public init(config: PipelineConfig, call: URL) {
         self.config = config
@@ -356,6 +357,9 @@ public final class PipelineRunner: @unchecked Sendable {
             throw PipelineError("couldn't start \(argv[0]): \(String(cString: strerror(rc)))")
         }
         let pid = spawned  // a constant for the closures below
+        let started = StepProcesses(root: pid)
+        lock.withLock { tracked = started }
+        started.watch()
 
         let eof = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
@@ -382,17 +386,17 @@ public final class PipelineRunner: @unchecked Sendable {
             DispatchQueue.global().async {
                 var status: Int32 = 0
                 while waitpid(pid, &status, 0) < 0, errno == EINTR {}
-                // Leftovers in the group can hold the pipe open: give them a moment, then stop them.
-                if eof.wait(timeout: .now() + 2) == .timedOut {
-                    kill(-pid, SIGTERM)
-                    _ = eof.wait(timeout: .now() + 3)
-                }
+                // The step is over: stop whatever it left running (which may also hold the pipe open).
+                started.stopWatching()
+                started.stopLeftovers()
+                _ = eof.wait(timeout: .now() + 5)
                 continuation.resume(returning: status)
             }
         }
         timer.cancel()
         let wasCancelled = lock.withLock { () -> Bool in
             child = 0
+            tracked = nil
             return cancelled
         }
         let signal = status & 0x7f
@@ -400,13 +404,18 @@ public final class PipelineRunner: @unchecked Sendable {
         return Exit(code: code, timedOut: sink.timedOut, cancelled: wasCancelled && !sink.timedOut)
     }
 
-    /// SIGTERM to the step's process group now, SIGKILL in 5 s if it's still there. Call with `lock` held.
+    /// Stops the running step: SIGTERM to its process group and to everything it started (which may have
+    /// left the group — `uv` gives Python its own), SIGKILL in 5 s if it's still there. Call with `lock` held.
     private func terminate(_ pid: pid_t) {
         kill(-pid, SIGTERM)
+        tracked?.signalAll(SIGTERM)
         DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self else { return }
             self.lock.withLock {
-                if self.child == pid { kill(-pid, SIGKILL) }
+                if self.child == pid {
+                    kill(-pid, SIGKILL)
+                    self.tracked?.signalAll(SIGKILL)
+                }
             }
         }
     }
@@ -426,6 +435,95 @@ public final class PipelineRunner: @unchecked Sendable {
             if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
         throw PipelineError("can't find \(command) on PATH")
+    }
+}
+
+/// Everything a step started, so what it leaves running can be stopped when it ends. Noted 4× a second
+/// while it runs: descendants of its first process — caught while the chain is intact, since an orphan is
+/// handed to launchd (the Cursor SDK's bridge outlives Python that way) — and, at the end, anything in
+/// their process groups. Start times tell a reused pid apart.
+final class StepProcesses: @unchecked Sendable {
+    private let root: pid_t
+    private let lock = NSLock()
+    private var seen: [pid_t: Int] = [:]  // pid → start time (µs)
+    private var timer: DispatchSourceTimer?
+
+    init(root: pid_t) { self.root = root }
+
+    func watch() {
+        let timer = DispatchSource.makeTimerSource(queue: .global())
+        timer.schedule(deadline: .now(), repeating: .milliseconds(250))
+        timer.setEventHandler { [weak self] in self?.note() }
+        lock.withLock { self.timer = timer }
+        timer.resume()
+    }
+
+    func stopWatching() {
+        lock.withLock { timer?.cancel() }
+    }
+
+    /// Adds the root's new descendants.
+    func note() {
+        let table = ProcessTable.mine()
+        lock.withLock {
+            var added = true
+            while added {
+                added = false
+                for p in table where seen[p.pid] == nil && (p.ppid == root || seen[p.ppid] != nil) {
+                    seen[p.pid] = p.start
+                    added = true
+                }
+            }
+        }
+    }
+
+    /// Still running: the processes noted, and the members of their process groups and the root's.
+    func leftovers() -> [pid_t] {
+        let table = ProcessTable.mine()
+        let me = getpid(), myGroup = getpgrp()
+        return lock.withLock {
+            table.filter { p in
+                guard p.pid != me, p.pid != root, p.pgid != myGroup else { return false }
+                return seen[p.pid] == p.start || p.pgid == root || (seen[p.pgid] != nil && p.pgid != p.pid)
+            }.map(\.pid)
+        }
+    }
+
+    func signalAll(_ signal: Int32) {
+        for pid in leftovers() { kill(pid, signal) }
+    }
+
+    /// SIGTERM to the leftovers now, SIGKILL 3 s later to any still there.
+    func stopLeftovers() {
+        let left = leftovers()
+        guard !left.isEmpty else { return }
+        for pid in left { kill(pid, SIGTERM) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [self] in signalAll(SIGKILL) }
+    }
+}
+
+/// My processes, from the kernel's process table.
+enum ProcessTable {
+    struct Entry {
+        let pid: pid_t
+        let ppid: pid_t
+        let pgid: pid_t
+        let start: Int  // µs since 1970
+    }
+
+    static func mine() -> [Entry] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_UID, Int32(bitPattern: getuid())]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0 else { return [] }
+        var procs = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride + 32)
+        size = procs.count * MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&mib, 4, &procs, &size, nil, 0) == 0 else { return [] }
+        return procs.prefix(size / MemoryLayout<kinfo_proc>.stride).compactMap { p in
+            guard p.kp_proc.p_pid > 0, p.kp_proc.p_stat != SZOMB else { return nil }
+            let t = p.kp_proc.p_un.__p_starttime
+            return Entry(pid: p.kp_proc.p_pid, ppid: p.kp_eproc.e_ppid, pgid: p.kp_eproc.e_pgid,
+                         start: Int(t.tv_sec) * 1_000_000 + Int(t.tv_usec))
+        }
     }
 }
 

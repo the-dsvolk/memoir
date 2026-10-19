@@ -49,8 +49,9 @@ struct OverlayView: View {
                     .textFieldStyle(.plain)
                     .font(.headline)
                     .onSubmit { model.rename(to: name) }
-                    .disabled(!model.isRecording && model.isBusy(model.folder))  // a step is working in its folder
-                    .help(!model.isRecording && model.isBusy(model.folder) ? "Can be renamed once processing finishes" : "")
+                    .disabled(!model.canRename)
+                    .help(model.canRename ? "" : model.isBusy(model.folder) ? "Can be renamed once processing finishes"
+                                                                             : "Only the call you just recorded can be renamed here")
                 Spacer()
                 if let startedAt = model.startedAt, model.isRecording {
                     TimelineView(.periodic(from: startedAt, by: 1)) { context in

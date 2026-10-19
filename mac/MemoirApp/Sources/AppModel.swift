@@ -166,9 +166,13 @@ final class AppModel {
         session.stop()
     }
 
-    /// Renames the call — during it, or after it (not while a step is working in its folder).
+    /// The call in the overlay can be renamed: the live one, or the one just recorded (not while a step
+    /// is working in its folder). Calls opened from Recent Calls can't be.
+    var canRename: Bool { isRecording || (lastStore != nil && lastStore?.folder == folder && !isBusy(folder)) }
+
+    /// Renames the call — during it, or after it.
     func rename(to name: String) {
-        guard name != callName, store != nil || !isBusy(folder) else { return }
+        guard name != callName, canRename else { return }
         callName = name
         guard let store = store ?? lastStore else { return }
         let old = store.folder.path
@@ -324,7 +328,28 @@ final class AppModel {
         processingErrors[folder.path] = nil
         let title = (try? CallInfo.load(folder))?.title ?? folder.lastPathComponent
         queue.append(PipelineJob(folder: folder, steps: steps, force: force, title: title))
+        showCall(folder)  // so the progress is in view
         runNext()
+    }
+
+    /// Shows a recorded call in the overlay — its transcript and the after-the-call row — unless a call
+    /// is live (the overlay belongs to it then).
+    func showCall(_ folder: URL) {
+        guard !isRecording else { return }
+        if self.folder?.standardizedFileURL != folder.standardizedFileURL {
+            let info = try? CallInfo.load(folder)
+            self.folder = folder
+            callName = info?.name ?? ""
+            transcript = TranscriptModel.load(folder)
+            quickNotes.removeAll()
+            prepAdditions.removeAll()
+            prep = ""
+            silenceHint = false
+            startedAt = nil
+            status = .idle
+            if pipelineStates[folder.path] == nil { pipelineStates[folder.path] = PipelineState.load(folder) }
+        }
+        if !overlayVisible { showOverlay() }
     }
 
     func cancelProcessing(_ folder: URL) {

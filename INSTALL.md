@@ -149,7 +149,7 @@ cd ~/GitHub/the-dsvolk/memoir/server
 ```bash
 cd mac/MemoirKit
 swift build -c release            # → .build/release/memoir
-swift test                        # 25 tests
+swift test                        # 27 tests
 ```
 
 ### 2. Copy the token from the Spark
@@ -317,7 +317,7 @@ running a remote step on such a call later asks first (`--allow-remote` in the C
 | Soak: 7.4 min in real time (30 × `meeting.wav`) | every repeat word-correct; the server kept pace — `upto` 446.4 s when stopped at 446 s, no backlog (stopped early to free the server for the live test) |
 | **Memoir.app** (2026-10-18) | builds with XcodeGen + `xcodebuild`, no warnings; signed with "Memoire Dev", hardened runtime, `audio-input` entitlement; Info.plist carries the Microphone / System Audio / Local Network texts directly. **Not yet run on a real call.** |
 | Shared core + CLI (2026-10-18) | 13 Swift tests (call folder, `_2` on clashes, rename, config round-trip, transcript model, …) pass |
-| **Pipeline** (2026-10-18) | 25 Swift tests pass (TOML reader, config checks, runner: outputs, links, stale outputs, skipped needs, re-runs, timeout, cancel stops the whole process group, one runner per call). Dry run of `memoir process` from an **empty environment** (as an app gets): Keychain key loaded, `uv` and `gcloud` found through `bash -l`, `cursor_sdk` imports in the CursorSDKExample folder, the printed link kept. **Not yet run end to end from the app.** |
+| **Pipeline** (2026-10-18) | 27 Swift tests pass (TOML reader, config checks, runner: outputs, links, stale outputs, skipped needs, re-runs, timeout, cancel stops the whole process group, leftovers outside it stopped, one runner per call). Dry run of `memoir process` from an **empty environment** (as an app gets): Keychain key loaded, `uv` and `gcloud` found through `bash -l`, `cursor_sdk` imports in the CursorSDKExample folder, the printed link kept. **From the app** (Recent Calls › youtube test 2 › Run All Again): Summary 35 s, Google Doc 9 s, link shown, notification. |
 
 Synthetic test audio (`say`) proves the pipeline; the live-mic run shows it works on a real voice.
 Accuracy on real calls (and the other side's audio) comes with the call tap (M2).
@@ -370,3 +370,16 @@ Problems hit while installing, and their fixes (newest last).
    previews); with hardened runtime, macOS only loads libraries signed by the app's Team ID, and a
    self-signed "Memoire Dev" identity has none. **Fix:** `ENABLE_DEBUG_DYLIB: NO` in `project.yml` —
    one binary, nothing to validate (better than turning library validation off).
+8. **Every Summary run left a `cursor-sdk-bridge` (node) running** (2026-10-18) — 66–196 MB each, eight
+   by the time it was noticed (seven from running `main.py` by hand). `cursor-sdk` 1.0.38 starts its
+   bridge through a shell wrapper (`bin/cursor-sdk-bridge`) that runs `"$DIR/node" …` **without
+   `exec`**; at exit the SDK sends SIGTERM to the wrapper, and node is orphaned. It also escapes the
+   step's process group, because `uv run` gives Python a group of its own. **Fix (memoir):** the runner
+   notes everything a step starts while it runs (descendants of its first process, 4× a second, with
+   start times) and, when the step ends — done, failed, cancelled or timed out — stops whatever is still
+   running, plus anything in those processes' groups. Running `main.py` by hand still leaks; the SDK
+   fix is `exec "$DIR/node" …` in its wrapper.
+9. **"Run All Again" from Recent Calls seemed to do nothing** (2026-10-18) — it ran (Summary 35 s,
+   then the Google Doc), but nothing was on screen: the overlay only showed the call recorded in that
+   session. **Fix:** running steps on any call opens the overlay on that call (its transcript and the
+   progress row); the menu-bar icon turns into an hourglass while processing; Recent Calls › Show Call.

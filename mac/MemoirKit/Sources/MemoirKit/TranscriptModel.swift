@@ -1,3 +1,5 @@
+import Foundation
+
 /// The transcript as a list of lines for a UI that can edit any line (the app's overlay).
 ///
 /// Lines are keyed by `(source, seg)`: a partial updates its line in place, a final replaces the text
@@ -37,4 +39,18 @@ public struct TranscriptModel: Sendable, Equatable {
     }
 
     public mutating func clear() { lines.removeAll() }
+
+    /// A recorded call's transcript, read back from its `transcript.jsonl` (a later line with the same
+    /// source and `seg` amends the earlier one).
+    public static func load(_ folder: URL) -> TranscriptModel {
+        var model = TranscriptModel()
+        guard let text = try? String(contentsOf: folder.appendingPathComponent("transcript.jsonl"), encoding: .utf8)
+        else { return model }
+        for line in text.split(whereSeparator: \.isNewline) {
+            guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+            model.apply(ServerMessage(type: "final", source: json["source"] as? String, seg: json["seg"] as? Int,
+                                      text: json["text"] as? String, t0: json["t0"] as? Double))
+        }
+        return model
+    }
 }

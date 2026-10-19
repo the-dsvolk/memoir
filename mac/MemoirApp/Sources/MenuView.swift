@@ -58,6 +58,8 @@ struct RecentCallMenu: View {
 
     var body: some View {
         Text(status)
+        Button("Show Call") { model.showCall(folder) }
+            .disabled(model.isRecording)
         Button("Open Folder") { model.open(folder) }
         ForEach(steps) { step in
             if let s = call.state?.steps[step.id], s.status == .ok {
