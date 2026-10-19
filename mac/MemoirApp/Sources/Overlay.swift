@@ -14,7 +14,7 @@ final class OverlayPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
-        isMovableByWindowBackground = true
+        isMovableByWindowBackground = false  // moved by WindowDragArea, so pane dividers can be dragged
         hidesOnDeactivate = false
         contentView = NSHostingView(rootView: rootView)
         if let screen = NSScreen.main?.visibleFrame {
@@ -81,28 +81,18 @@ struct OverlayView: View {
                 }
             }
 
-            HStack(alignment: .top, spacing: 12) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(model.transcript.lines) { line in
-                                TranscriptRow(line: line, labelled: model.sources.count > 1).id(line.id)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .onChange(of: model.transcript.lines.last?.text) {
-                        if let last = model.transcript.lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
+            if model.isRecording || !model.quickNotes.isEmpty || !model.prepAdditions.isEmpty {
+                // Drag the divider to give the notes more or less room; both sides grow with the overlay.
+                HSplitView {
+                    transcriptView
+                        .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.trailing, 8)
+                    SidePane(model: model)
+                        .frame(minWidth: 220, idealWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.leading, 8)
                 }
-                .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
-                .layoutPriority(1)
-
-                if model.isRecording || !model.quickNotes.isEmpty || !model.prepAdditions.isEmpty {
-                    Divider()
-                    SidePane(model: model)  // grows with the overlay, within limits
-                        .frame(minWidth: 240, idealWidth: 280, maxWidth: 380, maxHeight: .infinity)
-                }
+            } else {
+                transcriptView.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if !model.isRecording, let folder = model.folder, FileManager.default.fileExists(atPath: folder.path) {
@@ -112,12 +102,39 @@ struct OverlayView: View {
         }
         .padding(12)
         .frame(minWidth: 560, minHeight: 200)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background { WindowDragArea() }  // the header and margins move the overlay; dividers resize panes
+        .overlayBackground()  // Settings › Transcript window
         .onAppear { name = model.callName }
         .onChange(of: model.callName) { name = model.callName }
     }
 
+    private var transcriptView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(model.transcript.lines) { line in
+                        TranscriptRow(line: line, labelled: model.sources.count > 1).id(line.id)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .onChange(of: model.transcript.lines.last?.text) {
+                if let last = model.transcript.lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+        }
+    }
+
     private func clock(_ seconds: TimeInterval) -> String { meetingClock(seconds) }
+}
+
+/// Empty space that moves the window when dragged (the overlay has no title bar).
+struct WindowDragArea: View {
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .gesture(WindowDragGesture())
+            .allowsWindowActivationEvents(true)
+    }
 }
 
 func meetingClock(_ seconds: TimeInterval) -> String {
@@ -161,58 +178,71 @@ struct SidePane: View {
             .labelsHidden()
             .controlSize(.small)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if tab == .prep, !beforeCall.isEmpty {
-                            entry(caption: "Before the call", text: beforeCall)
-                        }
-                        ForEach(entries) { item in
-                            entry(caption: meetingClock(item.t), text: item.text).id(item.id)
-                        }
-                        if entries.isEmpty, tab == .notes || beforeCall.isEmpty {
-                            Text(tab == .notes ? "No notes yet" : "No prep yet").font(.caption).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .onChange(of: entries.count) {
-                    if let last = entries.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                }
-            }
-            .frame(maxHeight: .infinity)
-
             if model.isRecording {
-                TextEditor(text: tab == .notes ? $noteDraft : $prepDraft)
-                    .font(font)
-                    .focused($editing)
-                    .scrollContentBackground(.hidden)
-                    .padding(4)
-                    .frame(minHeight: 70, maxHeight: 110)
-                    .background(Color(nsColor: .textBackgroundColor).opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(alignment: .topLeading) {
-                        if draft.isEmpty {
-                            Text(tab == .notes ? "Type a note — ⌘↩ to add" : "Add prep: someone joined, a doc… — ⌘↩")
-                                .font(font).foregroundStyle(.tertiary)
-                                .padding(.horizontal, 9).padding(.vertical, 4).allowsHitTesting(false)
-                        }
-                    }
-                    .onChange(of: noteDraft) { old, new in
-                        if old.isEmpty, !new.isEmpty { noteStart = model.elapsed }
-                        if new.isEmpty { noteStart = nil }
-                    }
-                    .onChange(of: prepDraft) { old, new in
-                        if old.isEmpty, !new.isEmpty { prepStart = model.elapsed }
-                        if new.isEmpty { prepStart = nil }
-                    }
-                HStack {
-                    if let started { Text("at \(meetingClock(started))").font(.caption2).foregroundStyle(.secondary) }
-                    Spacer()
-                    Button(tab == .notes ? "Add Note" : "Add Prep") { add() }
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .controlSize(.small)
+                // Drag the divider to give the typing area more room; it also grows with the overlay.
+                VSplitView {
+                    entryList.frame(minHeight: 50, maxHeight: .infinity).padding(.bottom, 4)
+                    editor.frame(minHeight: 90, idealHeight: 150, maxHeight: .infinity).padding(.top, 6)
                 }
+            } else {
+                entryList.frame(maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var entryList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if tab == .prep, !beforeCall.isEmpty {
+                        entry(caption: "Before the call", text: beforeCall)
+                    }
+                    ForEach(entries) { item in
+                        entry(caption: meetingClock(item.t), text: item.text).id(item.id)
+                    }
+                    if entries.isEmpty, tab == .notes || beforeCall.isEmpty {
+                        Text(tab == .notes ? "No notes yet" : "No prep yet").font(.caption).foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .onChange(of: entries.count) {
+                if let last = entries.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+        }
+    }
+
+    private var editor: some View {
+        VStack(spacing: 6) {
+            TextEditor(text: tab == .notes ? $noteDraft : $prepDraft)
+                .font(font)
+                .focused($editing)
+                .scrollContentBackground(.hidden)
+                .padding(4)
+                .frame(maxHeight: .infinity)
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(alignment: .topLeading) {
+                    if draft.isEmpty {
+                        Text(tab == .notes ? "Type a note — ⌘↩ to add" : "Add prep: someone joined, a doc… — ⌘↩")
+                            .font(font).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 9).padding(.vertical, 4).allowsHitTesting(false)
+                    }
+                }
+                .onChange(of: noteDraft) { old, new in
+                    if old.isEmpty, !new.isEmpty { noteStart = model.elapsed }
+                    if new.isEmpty { noteStart = nil }
+                }
+                .onChange(of: prepDraft) { old, new in
+                    if old.isEmpty, !new.isEmpty { prepStart = model.elapsed }
+                    if new.isEmpty { prepStart = nil }
+                }
+            HStack {
+                if let started { Text("at \(meetingClock(started))").font(.caption2).foregroundStyle(.secondary) }
+                Spacer()
+                Button(tab == .notes ? "Add Note" : "Add Prep") { add() }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .controlSize(.small)
             }
         }
     }

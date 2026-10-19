@@ -238,8 +238,13 @@ The app lives in the **menu bar** (a waveform icon; a red dot while recording) �
   ○ Google Doc`, then **Open Summary**, **Open Google Doc** and **Copy Link**; a notification says when
   it's ready (click it to open the doc). The **⋯** menu runs a step again, shows its log or opens the
   folder. **Recent Calls** in the menu bar does the same for earlier calls.
-- **Settings…** (⌘,): the font and size for transcript and notes; save folder, save audio, server —
-  the last three written to `~/.config/memoir/config.toml`, which the CLI reads too.
+- **Resizing the overlay:** drag its edges; drag the divider between the transcript and **Notes | Prep**
+  to share the width, and the divider above the typing area to make it taller. Move the overlay by its
+  top bar or margins.
+- **Settings…** (⌘,): **Transcript window** — the font and size for transcript and notes, and the
+  **background** (translucent like now, Dark, Black, Light, White or any colour, with opacity; the text
+  turns light or dark to match); **Calls** — save folder, save audio, server, written to
+  `~/.config/memoir/config.toml`, which the CLI reads too; **After the call** — the pipeline.
 
 On first use macOS asks **for Memoir itself** (separately from your terminal): **Microphone**,
 **System Audio Recording** (Privacy & Security › Screen & System Audio Recording › *System Audio

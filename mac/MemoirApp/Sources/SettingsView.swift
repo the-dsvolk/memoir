@@ -9,10 +9,13 @@ struct SettingsView: View {
     @State private var saveError: String?
     @AppStorage(TextAppearance.fontKey) private var fontName = ""
     @AppStorage(TextAppearance.sizeKey) private var fontSize = TextAppearance.defaultSize
+    @AppStorage(TextAppearance.backgroundKey) private var background = TextAppearance.defaultBackground
+    @AppStorage(TextAppearance.customColorKey) private var customColor = TextAppearance.defaultCustomColor
+    @AppStorage(TextAppearance.opacityKey) private var opacity = TextAppearance.defaultOpacity
 
     var body: some View {
         Form {
-            Section("Transcript and notes text") {
+            Section("Transcript window") {
                 Picker("Font", selection: $fontName) {
                     Text("System").tag("")
                     Text("System Monospaced").tag(TextAppearance.systemMono)
@@ -25,9 +28,30 @@ struct SettingsView: View {
                         Text("\(Int(fontSize)) pt").monospacedDigit().frame(width: 44, alignment: .trailing)
                     }
                 }
-                Text("\(Text("Them:").bold()) So the plan for next quarter is to ship the beta.")
-                    .font(TextAppearance.font(fontName, size: fontSize))
-                    .lineLimit(2)
+                Picker("Background", selection: $background) {
+                    ForEach(TextAppearance.backgrounds, id: \.tag) { Text($0.name).tag($0.tag) }
+                }
+                if background == "custom" {
+                    ColorPicker("Colour", selection: customColorBinding, supportsOpacity: false)
+                }
+                if background != "material" {
+                    LabeledContent("Opacity") {
+                        HStack {
+                            Slider(value: $opacity, in: 0.5 ... 1)
+                            Text("\(Int((opacity * 100).rounded())) %").monospacedDigit().frame(width: 44, alignment: .trailing)
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {  // preview: text as the overlay shows it
+                    Text("\(Text("Them:").bold()) So the plan for next quarter is to ship the beta.")
+                    Text("\(Text("Me:").bold().foregroundStyle(Color.accentColor)) And the budget?")
+                    Text("…still talking").foregroundStyle(.secondary)
+                }
+                .font(TextAppearance.font(fontName, size: fontSize))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .overlayBackground(setsWindowAppearance: false)
             }
             Section("Calls") {
                 LabeledContent("Save calls to") {
@@ -79,6 +103,12 @@ struct SettingsView: View {
                 saveError = "Couldn't save settings: \(error.localizedDescription)"
             }
         }
+    }
+
+    private var customColorBinding: Binding<Color> {
+        Binding(
+            get: { Color(nsColor: TextAppearance.color(hex: customColor) ?? .black) },
+            set: { customColor = TextAppearance.hex(NSColor($0)) })
     }
 
     private func describe(_ step: PipelineStep) -> String {
