@@ -9,6 +9,8 @@ public struct MemoirConfig: Sendable, Equatable {
     public var saveAudio = false
     public var server = "ws://spark-0e81.local:8770/v1/stream"
     public var tokenFile = "~/.config/memoir/token"
+    /// With mic + system audio, silence the mic while it only hears the call (`EchoGate`).
+    public var echoGate = true
 
     public init() {}
 
@@ -25,6 +27,7 @@ public struct MemoirConfig: Sendable, Equatable {
             case ("save_audio", .bool(let b)): config.saveAudio = b
             case ("server", .string(let s)): config.server = s
             case ("token_file", .string(let s)): config.tokenFile = s
+            case ("echo_gate", .bool(let b)): config.echoGate = b
             default: continue
             }
         }
@@ -41,6 +44,7 @@ public struct MemoirConfig: Sendable, Equatable {
             save_audio = \(saveAudio)
             server     = \(Self.quote(server))
             token_file = \(Self.quote(tokenFile))
+            echo_gate  = \(echoGate)
 
             """
         try text.write(to: url, atomically: true, encoding: .utf8)

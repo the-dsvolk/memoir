@@ -17,7 +17,9 @@ let usage = """
       --steps A,B        pipeline steps to run after the call (default: the ones marked default = true)
       --keep-local       nothing from this call leaves the Mac: remote steps are off
       --no-process       don't run the pipeline after the call (memoir process can run it later)
-      --out DIR          save folder (default from ~/.config/memoir/config.toml, else ~/memoir)
+      --no-echo-gate     with mic+system, don't silence the mic while it only hears the call
+                         (default from echo_gate in the config, on)
+      --out DIR         save folder (default from ~/.config/memoir/config.toml, else ~/memoir)
       --save-audio       also save the audio, one WAV per source, in the call's folder
       --no-record        don't write a call folder (quick tests)
       --input FILE       stream an audio file in real time instead of capturing
@@ -78,6 +80,7 @@ struct Options {
     var steps: [String]?
     var keepLocal = false
     var process = true
+    var echoGate = true
     var pipeline = PipelineConfig.defaultPath
 
     var sources: [Source] {
@@ -112,6 +115,7 @@ struct Options {
                 options.steps = try args.value(flag).split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
             case "--keep-local": options.keepLocal = true
             case "--no-process": options.process = false
+            case "--no-echo-gate": options.echoGate = false
             case "--pipeline": options.pipeline = try args.value(flag)
             case "--out": options.out = try args.value(flag)
             case "--save-audio": options.saveAudio = true
@@ -257,7 +261,7 @@ struct MemoirCLI {
             : nil
         let session = MeetingSession(options: SessionOptions(
             server: server, token: try config.token(), sources: sources, name: name, prep: options.prep,
-            input: options.input, app: "memoir-cli"))
+            input: options.input, app: "memoir-cli", echoGate: config.echoGate && options.echoGate))
         if let store, store.saveAudio {
             session.onAudio = { source, samples in try? store.record(audio: samples, from: source) }
         }
@@ -315,6 +319,11 @@ struct MemoirCLI {
                 Terminal.err("\n")
                 if let store { Terminal.err("saved to \(store.folder.path)\n") }
                 Terminal.err("server backup: \(serverPath ?? "?")\n\(latency.summary)\n")
+                if let gate = session.echoGate?.stats {
+                    try? store?.setEchoGate(gate)
+                    Terminal.err(String(format: "echo gate: silenced %.1f s of %.0f s of mic audio", gate.gatedSeconds, gate.micSeconds)
+                                 + (gate.leakDb.map { String(format: " (the call leaked into the mic at %.0f dB)", $0) } ?? "") + "\n")
+                }
             case .failed(let message):
                 failed = message
             }

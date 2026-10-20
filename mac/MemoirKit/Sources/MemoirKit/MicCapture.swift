@@ -7,8 +7,12 @@ import AVFoundation
 public final class MicCapture: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private var continuation: AsyncStream<[Int16]>.Continuation?
+    /// Runs on each chunk, with the host time (s) of its first sample, before it's yielded — the echo gate.
+    private let process: (@Sendable ([Int16], Double) -> [Int16])?
 
-    public init() {}
+    public init(process: (@Sendable ([Int16], Double) -> [Int16])? = nil) {
+        self.process = process
+    }
 
     /// Asks for microphone access. For a command-line tool macOS asks on behalf of the terminal app.
     public static func requestAccess() async -> Bool {
@@ -31,9 +35,12 @@ public final class MicCapture: @unchecked Sendable {
         let converter = try PCMConverter(inputFormat: hardwareFormat)
         let (stream, continuation) = AsyncStream.makeStream(of: [Int16].self, bufferingPolicy: .unbounded)
         self.continuation = continuation
-        input.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat) { buffer, _ in
-            let samples = converter.convert(buffer)
-            if !samples.isEmpty { continuation.yield(samples) }
+        let process = process
+        input.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat) { buffer, when in
+            var samples = converter.convert(buffer)
+            guard !samples.isEmpty else { return }
+            if let process { samples = process(samples, HostTime.seconds(when.isHostTimeValid ? when.hostTime : nil)) }
+            continuation.yield(samples)
         }
         engine.prepare()
         try engine.start()
@@ -45,5 +52,13 @@ public final class MicCapture: @unchecked Sendable {
         engine.stop()
         continuation?.finish()
         continuation = nil
+    }
+}
+
+/// Capture timestamps on one clock: the host clock (mach_absolute_time), in seconds — what the mic's
+/// `AVAudioTime` and the system tap's `AudioTimeStamp` both carry.
+enum HostTime {
+    static func seconds(_ hostTime: UInt64?) -> Double {
+        AVAudioTime.seconds(forHostTime: hostTime ?? mach_absolute_time())
     }
 }

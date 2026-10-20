@@ -120,7 +120,8 @@ final class AppModel {
             for attempt in 1 ... Self.networkAttempts {
                 // A session is single-use, so each attempt gets a fresh one.
                 let session = MeetingSession(options: SessionOptions(
-                    server: server, token: token, sources: sources, name: name, prep: prep, app: "memoir-app"))
+                    server: server, token: token, sources: sources, name: name, prep: prep, app: "memoir-app",
+                    echoGate: config.echoGate))
                 if newStore.saveAudio {
                     session.onAudio = { source, samples in try? newStore.record(audio: samples, from: source) }
                 }
@@ -290,6 +291,7 @@ final class AppModel {
         case .silenceHint:
             silenceHint = true
         case .stopped(let serverPath, let latency):
+            if let gate = session?.echoGate?.stats { try? store?.setEchoGate(gate) }
             try? store?.finish(serverPath: serverPath)
             lastSummary = latency.summary
             let folder = store?.folder

@@ -149,7 +149,7 @@ cd ~/GitHub/the-dsvolk/memoir/server
 ```bash
 cd mac/MemoirKit
 swift build -c release            # → .build/release/memoir
-swift test                        # 27 tests
+swift test                        # 32 tests
 ```
 
 ### 2. Copy the token from the Spark
@@ -323,6 +323,7 @@ running a remote step on such a call later asks first (`--allow-remote` in the C
 | **Memoir.app** (2026-10-18) | builds with XcodeGen + `xcodebuild`, no warnings; signed with "Memoire Dev", hardened runtime, `audio-input` entitlement; Info.plist carries the Microphone / System Audio / Local Network texts directly. **Not yet run on a real call.** |
 | Shared core + CLI (2026-10-18) | 13 Swift tests (call folder, `_2` on clashes, rename, config round-trip, transcript model, …) pass |
 | **Pipeline** (2026-10-18) | 27 Swift tests pass (TOML reader, config checks, runner: outputs, links, stale outputs, skipped needs, re-runs, timeout, cancel stops the whole process group, leftovers outside it stopped, one runner per call). Dry run of `memoir process` from an **empty environment** (as an app gets): Keychain key loaded, `uv` and `gcloud` found through `bash -l`, `cursor_sdk` imports in the CursorSDKExample folder, the printed link kept. **From the app** (Recent Calls › youtube test 2 › Run All Again): Summary 35 s, Google Doc 9 s, link shown, notification. |
+| **Echo gate** (2026-10-19) | 5 Swift tests with synthetic speech: a −34 dB leak 30 ms or 300 ms (Bluetooth) behind Them is silenced; my voice over Them passes (≥ 95 % of its energy); nothing playing → the mic is untouched; cross-talk all call long can't teach it to mute me (leak capped at −25 dB). **Real calls** (2026-10-19, headphones + Yeti): Me lines that are near-copies of a Them line went from 7–58 per call (four calls before) to **0** (two calls after); Me words that were really the call from 6–60 % to 0–6 %. A few short leaks still pass in a long call when the learned leak sits at its floor (−60 dB); my own words not checked against saved audio yet. |
 
 Synthetic test audio (`say`) proves the pipeline; the live-mic run shows it works on a real voice.
 Accuracy on real calls (and the other side's audio) comes with the call tap (M2).
@@ -388,3 +389,11 @@ Problems hit while installing, and their fixes (newest last).
    then the Google Doc), but nothing was on screen: the overlay only showed the call recorded in that
    session. **Fix:** running steps on any call opens the overlay on that call (its transcript and the
    progress row); the menu-bar icon turns into an hourglass while processing; Recent Calls › Show Call.
+10. **Other people showed up as "Me" — with headphones on** (2026-10-19). The Yeti (a sensitive
+    condenser mic) picked up the call leaking from the headphones, so Me had garbled copies of Them's
+    sentences in the same seconds. The meeting app's "Noise removal" doesn't help: it only cleans what
+    that app sends, and it removes noise, not voices; Apple's voice processing only cancels audio the
+    app itself plays. **Fix:** the echo gate (DESIGN.md §4.3) — memoir uses its own system-audio stream
+    as the reference and silences mic blocks that are only the leak. `memoir listen` prints what it did
+    at the end; `meeting.json` has `echo_gate`. **Check it:** Microphone + this Mac's audio, play a
+    video with speech in the headphones, stay quiet → no Me lines; talk over it → your words as Me.

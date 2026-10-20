@@ -136,9 +136,27 @@ Two **capture modes**, picked in the menu bar:
 
 ### 4.3 Echo / bleed (call mode)
 
-On laptop speakers the mic hears the remote side, so "Me" would transcribe "Them" a second time.
-v1: **headphones recommended**; the app shows a hint when output is the built-in speakers. M4 adds a
-server-side filter: drop a Me final whose normalised text matches a Them final overlapping within ±1 s.
+On laptop speakers the mic hears the remote side, so "Me" would transcribe "Them" a second time —
+and **headphones don't fully prevent it**: on 2026-10-19 (headphones, Yeti condenser mic) the mic
+picked up the call leaking from the headphones, giving a garbled second copy of Them's sentences as
+Me ("I I believe that that's the intended *and common*" as Me while Them had "…the intended *end
+goal*", same seconds) — near-copies in every call, most in a loud team meeting.
+
+**Echo gate (Mac, `EchoGate`, on by default with mic + system audio).** Apple's voice processing
+can't remove this: its echo canceller only knows audio its own app plays, and the call is played by
+Meet / Zoom (for other apps' audio Apple's answer is ducking it). memoir has the exact reference
+instead — the system audio it captures for Them. Both captures carry the host time of each buffer, so
+in 20 ms blocks the gate compares the mic with what played in the last 0.4 s (covers output and
+Bluetooth latency): while Them plays, a mic block no louder than the **learned leak** (mic ÷ Them,
+75th percentile while Them plays, capped at −25 dB) times 3 plus the room's noise becomes silence. My
+voice is 15–30 dB above the leak at the mic, so it passes even over Them; once it's there the gate
+stays open 250 ms so the gaps between my syllables aren't cut. Not used in in-person mode (no
+reference). `meeting.json` records `echo_gate: {gated_s, mic_s, leak_db}`; a `leak_db` at the cap
+means the leak is too strong to separate (turn the headphones or the mic gain down). Setting:
+`echo_gate` in `config.toml` (app Settings › Calls; CLI `--no-echo-gate`).
+
+Later, if needed: a real adaptive echo canceller with the same reference (SpeexDSP / WebRTC AEC3),
+and the text-level backstop — drop a Me final whose words match a Them final within ±1 s.
 
 ### 4.4 Streaming client
 
@@ -736,7 +754,8 @@ fallback.
 3. ~~Default language~~ — **decided: English only** (D10).
 4. **Zoom / WebEx helper processes** — which one actually plays call audio (M2)?
 5. ~~Where transcripts live~~ — **decided: the Mac folder is the record, the Spark a backup** (D12).
-6. **Headphones-only for v1** acceptable until the M4 echo filter?
+6. **Headphones-only for v1** acceptable until the M4 echo filter? (Now: headphones + the echo gate,
+   §4.3 — to confirm on real calls that it removes the leak without cutting my words.)
 7. **Quick-note hotkey** — is ⌃⌥N free in my setup?
 8. **Assist** — is the punctuation / interrogative heuristic good enough, or do we need an LLM
    classifier? And query the Spark's shared qmx index (current plan) or the Mac's personal one?

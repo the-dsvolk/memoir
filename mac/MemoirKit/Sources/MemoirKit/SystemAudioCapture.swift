@@ -13,12 +13,16 @@ public final class SystemAudioCapture: @unchecked Sendable {
     private var procID: AudioDeviceIOProcID?
     private var continuation: AsyncStream<[Int16]>.Continuation?
     private let queue = DispatchQueue(label: "memoir.system-audio", qos: .userInteractive)
+    /// Sees each chunk, with the host time (s) of its first sample — the echo gate's reference.
+    private let observe: (@Sendable ([Int16], Double) -> Void)?
 
     /// Name of the output device the tap is attached to, and the tap's native format — for display.
     public private(set) var outputDeviceName = ""
     public private(set) var tapFormat = ""
 
-    public init() {}
+    public init(observe: (@Sendable ([Int16], Double) -> Void)? = nil) {
+        self.observe = observe
+    }
 
     public func start() throws -> AsyncStream<[Int16]> {
         let ownProcess = CoreAudioProperty.processObject(pid: getpid())
@@ -56,11 +60,17 @@ public final class SystemAudioCapture: @unchecked Sendable {
         let converter = try PCMConverter(inputFormat: format)
         let (stream, continuation) = AsyncStream.makeStream(of: [Int16].self, bufferingPolicy: .unbounded)
         self.continuation = continuation
-        try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, input, _, _, _ in
+        let observe = observe
+        try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, input, inputTime, _, _ in
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: input, deallocator: nil)
             else { return }
             let samples = converter.convert(buffer)
-            if !samples.isEmpty { continuation.yield(samples) }
+            guard !samples.isEmpty else { return }
+            if let observe {
+                let stamp = inputTime.pointee
+                observe(samples, HostTime.seconds(stamp.mFlags.contains(.hostTimeValid) ? stamp.mHostTime : nil))
+            }
+            continuation.yield(samples)
         }, "create the IO proc")
         try check(AudioDeviceStart(aggregateID, procID), "start the aggregate device")
         return stream
