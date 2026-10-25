@@ -280,7 +280,7 @@ min_finals = 5                      # shorter calls aren't processed automatical
 [[step]]
 id = "summary"
 label = "Summary"
-cwd = "~/GitHub/Cruise/CursorSDKExample"
+cwd = "~/GitHub/Me/CursorSDKExample"
 run = ["uv", "run", "python", "main.py", "{call}"]
 keychain = { CURSOR_API_KEY = "cursor-api-key" }   # security find-generic-password -a $USER -s … -w
 outputs = ["summary.md"]

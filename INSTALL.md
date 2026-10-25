@@ -258,7 +258,7 @@ after Ctrl-C, or any time with `memoir process` (DESIGN.md §4.8). They're liste
 
 | Step | Runs | Makes |
 |---|---|---|
-| **Summary** | `uv run python main.py <call>` in `~/GitHub/Cruise/CursorSDKExample`, with `CURSOR_API_KEY` from the Keychain — a Cursor agent | `summary.md` in the call folder: summary, decisions, action items, your notes expanded |
+| **Summary** | `uv run python main.py <call>` in `~/GitHub/Me/CursorSDKExample`, with `CURSOR_API_KEY` from the Keychain — a Cursor agent | `summary.md` in the call folder: summary, decisions, action items, your notes expanded |
 | **Google Doc** | `~/.claude/skills/md-to-gdoc/create_gdoc.sh <call>/summary.md "<name> — <date>"` | a new Google Doc in My Drive; its link is shown in the app |
 
 ### 1. Set it up

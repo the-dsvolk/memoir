@@ -14,14 +14,14 @@ min_finals = 5  # calls with fewer finished lines aren't processed automatically
 
 # Summary, decisions, action items and expanded notes → <call>/summary.md, written by a Cursor agent.
 # The same as running, in Terminal:
-#   cd ~/GitHub/Cruise/CursorSDKExample
+#   cd ~/GitHub/Me/CursorSDKExample
 #   export CURSOR_API_KEY="$(security find-generic-password -a "$USER" -s cursor-api-key -w)"
 #   uv run python main.py <call-folder>
 [[step]]
 id = "summary"
 label = "Summary"
 description = "A Cursor agent writes summary.md: the summary, decisions, action items, and your notes expanded and checked against the transcript."
-cwd = "~/GitHub/Cruise/CursorSDKExample"
+cwd = "~/GitHub/Me/CursorSDKExample"
 run = ["uv", "run", "python", "main.py", "{call}"]
 keychain = { CURSOR_API_KEY = "cursor-api-key" }  # login Keychain, account = your user
 outputs = ["summary.md"]
