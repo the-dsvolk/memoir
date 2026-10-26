@@ -122,9 +122,10 @@ systemctl --user stop memoir-asr-dev            # stop it
 ```
 
 Or in the foreground: `cd server && ~/.local/bin/uv run --no-sync python -m memoir_asr`. Start-up takes
-~40 s (model load + one warm-up step), then the log shows
-`engine ready: nvidia/nemotron-speech-streaming-en-0.6b@ebe59e5, 8960-sample frames (0.56 s)`. The
-permanent `systemd --user` unit is in `DESIGN.md` §9 (M4).
+~40 s (model load + one warm-up step). The log starts with the version — `memoir-asr 0.2.0 (wire
+protocol 1)`, from `git describe` in the checkout, so `git fetch --tags` / `git pull` before restarting —
+then shows `engine ready: nvidia/nemotron-speech-streaming-en-0.6b@ebe59e5, 8960-sample frames (0.56 s)`.
+The permanent `systemd --user` unit is in `DESIGN.md` §9 (M4).
 
 Settings (environment): `MEMOIR_HOST` (0.0.0.0), `MEMOIR_PORT` (8770), `MEMOIR_TOKEN` /
 `MEMOIR_TOKEN_FILE`, `MEMOIR_MODEL`, `MEMOIR_MODEL_REVISION`, `MEMOIR_CHUNK_MS` (80 / 160 / **560** /
@@ -147,10 +148,14 @@ cd ~/GitHub/the-dsvolk/memoir/server
 ### 1. Build
 
 ```bash
+scripts/build-cli.sh              # → mac/MemoirKit/.build/release/memoir, version stamped in
 cd mac/MemoirKit
-swift build -c release            # → .build/release/memoir
-swift test                        # 32 tests
+swift test                        # 36 tests
+.build/release/memoir --version   # memoir 0.2.0+3 (3005f27) — build, commit, date, wire protocol
 ```
+
+`scripts/build-cli.sh` is `swift build -c release` plus the version from git embedded in the binary
+(DESIGN.md §9.1); a plain `swift build` works the same but says `memoir dev`.
 
 ### 2. Copy the token from the Spark
 
@@ -244,7 +249,11 @@ The app lives in the **menu bar** (a waveform icon; a red dot while recording) �
 - **Settings…** (⌘,): **Transcript window** — the font and size for transcript and notes, and the
   **background** (translucent like now, Dark, Black, Light, White or any colour, with opacity; the text
   turns light or dark to match); **Calls** — save folder, save audio, server, written to
-  `~/.config/memoir/config.toml`, which the CLI reads too; **After the call** — the pipeline.
+  `~/.config/memoir/config.toml`, which the CLI reads too; **After the call** — the pipeline; **Version** —
+  this build and the server's, with **Copy** for bug reports.
+- **About Memoir** (menu bar): the version (`0.2.0`, or `0.2.0+3 (3005f27)` between releases), build
+  number, commit, build date and the memoir-asr version from the last call. The build stamps it from git
+  automatically (DESIGN.md §9.1).
 
 On first use macOS asks **for Memoir itself** (separately from your terminal): **Microphone**,
 **System Audio Recording** (Privacy & Security › Screen & System Audio Recording › *System Audio
@@ -324,6 +333,7 @@ running a remote step on such a call later asks first (`--allow-remote` in the C
 | Shared core + CLI (2026-10-18) | 13 Swift tests (call folder, `_2` on clashes, rename, config round-trip, transcript model, …) pass |
 | **Pipeline** (2026-10-18) | 27 Swift tests pass (TOML reader, config checks, runner: outputs, links, stale outputs, skipped needs, re-runs, timeout, cancel stops the whole process group, leftovers outside it stopped, one runner per call). Dry run of `memoir process` from an **empty environment** (as an app gets): Keychain key loaded, `uv` and `gcloud` found through `bash -l`, `cursor_sdk` imports in the CursorSDKExample folder, the printed link kept. **From the app** (Recent Calls › youtube test 2 › Run All Again): Summary 35 s, Google Doc 9 s, link shown, notification. |
 | **Echo gate** (2026-10-19) | 5 Swift tests with synthetic speech: a −34 dB leak 30 ms or 300 ms (Bluetooth) behind Them is silenced; my voice over Them passes (≥ 95 % of its energy); nothing playing → the mic is untouched; cross-talk all call long can't teach it to mute me (leak capped at −25 dB). **Real calls** (2026-10-19, headphones + Yeti): Me lines that are near-copies of a Them line went from 7–58 per call (four calls before) to **0** (two calls after); Me words that were really the call from 6–60 % to 0–6 %. A few short leaks still pass in a long call when the learned leak sits at its floor (−60 dB); my own words not checked against saved audio yet. |
+| **Versions** (2026-10-25) | `v0.2.0` tagged on `main` (3005f27). `scripts/version.sh` → 0.2.0, build 42; the app's built Info.plist stamped (version, build, commit, date) before code signing, signature valid; `scripts/build-cli.sh` → `memoir --version` = `memoir 0.2.0 (3005f27, modified)` on a dirty tree, plain `swift build` → `memoir dev`; server `version.py` → same string; protocol checks on both sides. 36 Swift tests + 4 server tests (`python3 -m unittest discover -s tests -p test_version.py`). **Server change not deployed on the Spark yet.** |
 
 Synthetic test audio (`say`) proves the pipeline; the live-mic run shows it works on a real voice.
 Accuracy on real calls (and the other side's audio) comes with the call tap (M2).

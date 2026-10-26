@@ -26,7 +26,7 @@ public struct SessionOptions: Sendable {
 }
 
 public enum SessionEvent: Sendable {
-    case ready(model: String, chunkMs: Int)
+    case ready(model: String, chunkMs: Int, serverVersion: String?)  // version: servers since 0.3
     case capturing([String])  // what is being captured, for display
     case message(ServerMessage)  // partial, final, notes_ready, error
     case silenceHint  // system audio has been silent for 5 s — likely no permission
@@ -72,7 +72,7 @@ public final class MeetingSession: @unchecked Sendable {
                                                        sources: options.sources))
         lock.withLock { startedAt = ProcessInfo.processInfo.systemUptime }
         let chunkMs = ready.chunkMs ?? 560
-        emit.yield(.ready(model: ready.model ?? "?", chunkMs: chunkMs))
+        emit.yield(.ready(model: ready.model ?? "?", chunkMs: chunkMs, serverVersion: ready.serverVersion))
 
         let logs = Dictionary(uniqueKeysWithValues: options.sources.map { ($0.name, SendLog()) })
         let chunkSamples = UInt64(chunkMs * Wire.sampleRate / 1000)

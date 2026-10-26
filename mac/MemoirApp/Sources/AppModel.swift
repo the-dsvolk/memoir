@@ -42,6 +42,8 @@ final class AppModel {
     var folder: URL?
     var startedAt: Date?
     var serverInfo = ""
+    /// memoir-asr's version, as of the last call ("before 0.3" if it didn't say); nil before any call.
+    var serverVersion = UserDefaults.standard.string(forKey: "lastServerVersion")
     var capturing = ""
     var silenceHint = false
     var lastSummary = ""
@@ -233,6 +235,35 @@ final class AppModel {
                      floating: true)
     }
 
+    /// Everything about this build, for About, Settings and bug reports.
+    var versionReport: String {
+        let version = MemoirVersion.current
+        var lines = ["Memoir \(version.display)"] + version.details
+        lines.append("server: " + (serverVersion.map { "memoir-asr \($0)" } ?? "not connected yet")
+                     + ", wire protocol \(Wire.protocolVersion)")
+        return lines.joined(separator: "\n")
+    }
+
+    /// The standard About window — in front, on the pointer's screen, like Settings. A menu-bar app has
+    /// no visible app menu, so this is the only way to it.
+    func showAbout() {
+        NSApp.activate()
+        let version = MemoirVersion.current
+        let credits = versionReport.split(separator: "\n").dropFirst().joined(separator: "\n")
+            + "\n\ngithub.com/the-dsvolk/memoir"
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "Memoir",
+            .applicationVersion: version.display,
+            .version: version.isStamped ? "build \(version.build)" : "unstamped",
+            .credits: NSAttributedString(string: credits, attributes: [
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style]),
+        ])
+        bringToFront(where: { $0 is NSPanel && !($0 is OverlayPanel) && $0.isVisible }, floating: true)
+    }
+
     /// Waits for the window to exist (SwiftUI makes it on first open), then floats it, moves it to the
     /// pointer's screen (if it's on another one) and the current Space, and brings it forward.
     private func bringToFront(where match: @escaping (NSWindow) -> Bool, floating: Bool, attempt: Int = 0) {
@@ -279,10 +310,12 @@ final class AppModel {
 
     private func handle(_ event: SessionEvent) {
         switch event {
-        case .ready(let model, let chunkMs):
+        case .ready(let model, let chunkMs, let version):
             status = .live
             serverInfo = "\(model), \(chunkMs) ms"
-            try? store?.setServer(model: model, chunkMs: chunkMs)
+            serverVersion = version ?? "before 0.3"
+            UserDefaults.standard.set(serverVersion, forKey: "lastServerVersion")
+            try? store?.setServer(model: model, chunkMs: chunkMs, version: version)
         case .capturing(let what):
             capturing = what.joined(separator: "; ")
         case .message(let msg):

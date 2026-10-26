@@ -1,6 +1,6 @@
 [project]
 name = "memoir-asr"
-version = "0.0.1"
+version = "0.0.1"  # placeholder — memoir's version is the git tag vX.Y.Z (DESIGN.md §9.1)
 description = "memoir ASR server — Nemotron Speech Streaming EN 0.6B on the DGX Spark (spark-0e81)"
 requires-python = ">=3.12,<3.13"
 dependencies = [

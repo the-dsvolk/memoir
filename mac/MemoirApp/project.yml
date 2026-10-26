@@ -28,13 +28,25 @@ targets:
       properties:
         CFBundleName: Memoir
         CFBundleDisplayName: Memoir
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        # Placeholders: the "Stamp version" step below writes the real ones from git (DESIGN.md §9.1).
+        CFBundleShortVersionString: "0.0.0"
+        CFBundleVersion: "0"
         LSMinimumSystemVersion: "26.0"
         LSUIElement: true  # menu-bar app, no Dock icon
         NSMicrophoneUsageDescription: Memoir transcribes your voice during calls and meetings.
         NSAudioCaptureUsageDescription: Memoir transcribes the call audio playing on this Mac.
         NSLocalNetworkUsageDescription: Memoir streams audio to your transcription server on the local network.
+    postBuildScripts:
+      # Version, build number, commit and build date from git into the built app's Info.plist, before code
+      # signing. Runs on every build (a new commit or tag changes it). The Info.plist is declared as its
+      # input so it runs after Xcode writes that file — otherwise Xcode may write it afterwards and the
+      # placeholders win.
+      - name: Stamp version
+        script: |
+          "$SRCROOT/../../scripts/version.sh" --plist "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Generated/Memoir.entitlements
       properties:
@@ -52,3 +64,4 @@ targets:
         ENABLE_DEBUG_DYLIB: NO
         ENABLE_APP_SANDBOX: NO
         GENERATE_INFOPLIST_FILE: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO  # "Stamp version" reads the git history

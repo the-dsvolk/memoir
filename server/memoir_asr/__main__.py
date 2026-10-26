@@ -13,11 +13,14 @@ import uvicorn  # noqa: E402
 
 from .app import create_app  # noqa: E402
 from .engine import Engine  # noqa: E402
+from .protocol import PROTOCOL  # noqa: E402
 from .settings import Settings  # noqa: E402
+from .version import VERSION  # noqa: E402
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger(__name__).info("memoir-asr %s (wire protocol %d)", VERSION, PROTOCOL)
     settings = Settings.from_env()
     engine = Engine(settings.model, settings.revision, settings.chunk_ms)  # load before accepting clients
     uvicorn.run(create_app(settings, engine), host=settings.host, port=settings.port, log_level="info")

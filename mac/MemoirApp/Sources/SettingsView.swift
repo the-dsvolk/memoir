@@ -95,6 +95,18 @@ struct SettingsView: View {
                 Text("Shared with `memoir process`. Steps run on this Mac through your login shell; their logs are in each call's pipeline folder.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                LabeledContent("Version") {
+                    HStack {
+                        Text(model.versionReport.split(separator: "\n").first.map(String.init) ?? "")
+                            .textSelection(.enabled)
+                        Button("Copy") { model.copy(model.versionReport) }
+                            .help("Copies the version, build, commit and server version — for bug reports")
+                    }
+                }
+                Text(model.versionReport.split(separator: "\n").dropFirst().joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 520)

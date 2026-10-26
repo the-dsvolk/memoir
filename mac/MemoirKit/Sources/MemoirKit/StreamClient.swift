@@ -26,6 +26,10 @@ public final class StreamClient: @unchecked Sendable {
         }
         if reply.type == "error" { throw MemoirError.server(code: reply.code ?? "?", message: reply.message ?? "") }
         guard reply.type == "ready" else { throw MemoirError.unexpectedMessage }
+        let serverProtocol = reply.protocolVersion ?? 1  // servers before 0.3 don't say: they speak 1
+        guard serverProtocol == Wire.protocolVersion else {
+            throw MemoirError.protocolMismatch(server: serverProtocol, client: Wire.protocolVersion)
+        }
         return reply
     }
 
