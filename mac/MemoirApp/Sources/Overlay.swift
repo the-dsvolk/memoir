@@ -73,6 +73,10 @@ struct OverlayView: View {
                 Text("Waiting for network access — if macOS asks, allow Memoir to find devices on your local network (System Settings › Privacy & Security › Local Network).")
                     .font(.caption).foregroundStyle(.orange)
             }
+            if case .reconnecting(let reason) = model.status {
+                Text("Lost the server (\(reason)) — reconnecting. Still recording: the transcript catches up when it's back.")
+                    .font(.caption).foregroundStyle(.orange).lineLimit(3)
+            }
             if case .failed(let message) = model.status {
                 HStack(alignment: .top) {
                     Text(message).font(.caption).foregroundStyle(.red).lineLimit(4)
@@ -311,6 +315,7 @@ struct StatusPill: View {
         case .waitingForNetwork: "waiting for network…"
         case .live: "live"
         case .stopping: "saving…"
+        case .reconnecting: "reconnecting…"
         case .failed: "error"
         }
     }
@@ -319,7 +324,7 @@ struct StatusPill: View {
         switch status {
         case .live: .green
         case .failed: .red
-        case .connecting, .waitingForNetwork, .stopping: .orange
+        case .connecting, .waitingForNetwork, .stopping, .reconnecting: .orange
         case .idle: .gray
         }
     }

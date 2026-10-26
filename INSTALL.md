@@ -150,7 +150,7 @@ cd ~/GitHub/the-dsvolk/memoir/server
 ```bash
 scripts/build-cli.sh              # → mac/MemoirKit/.build/release/memoir, version stamped in
 cd mac/MemoirKit
-swift test                        # 36 tests
+swift test                        # 42 tests
 .build/release/memoir --version   # memoir 0.2.0+3 (3005f27) — build, commit, date, wire protocol
 ```
 
@@ -333,7 +333,8 @@ running a remote step on such a call later asks first (`--allow-remote` in the C
 | Shared core + CLI (2026-10-18) | 13 Swift tests (call folder, `_2` on clashes, rename, config round-trip, transcript model, …) pass |
 | **Pipeline** (2026-10-18) | 27 Swift tests pass (TOML reader, config checks, runner: outputs, links, stale outputs, skipped needs, re-runs, timeout, cancel stops the whole process group, leftovers outside it stopped, one runner per call). Dry run of `memoir process` from an **empty environment** (as an app gets): Keychain key loaded, `uv` and `gcloud` found through `bash -l`, `cursor_sdk` imports in the CursorSDKExample folder, the printed link kept. **From the app** (Recent Calls › youtube test 2 › Run All Again): Summary 35 s, Google Doc 9 s, link shown, notification. |
 | **Echo gate** (2026-10-19) | 5 Swift tests with synthetic speech: a −34 dB leak 30 ms or 300 ms (Bluetooth) behind Them is silenced; my voice over Them passes (≥ 95 % of its energy); nothing playing → the mic is untouched; cross-talk all call long can't teach it to mute me (leak capped at −25 dB). **Real calls** (2026-10-19, headphones + Yeti): Me lines that are near-copies of a Them line went from 7–58 per call (four calls before) to **0** (two calls after); Me words that were really the call from 6–60 % to 0–6 %. A few short leaks still pass in a long call when the learned leak sits at its floor (−60 dB); my own words not checked against saved audio yet. |
-| **Versions** (2026-10-25) | `v0.2.0` tagged on `main` (3005f27). `scripts/version.sh` → 0.2.0, build 42; the app's built Info.plist stamped (version, build, commit, date) before code signing, signature valid; `scripts/build-cli.sh` → `memoir --version` = `memoir 0.2.0 (3005f27, modified)` on a dirty tree, plain `swift build` → `memoir dev`; server `version.py` → same string; protocol checks on both sides. 36 Swift tests + 4 server tests (`python3 -m unittest discover -s tests -p test_version.py`). **Server change not deployed on the Spark yet.** |
+| **Versions** (2026-10-25) | `v0.2.0` tagged on `main` (3005f27). `scripts/version.sh` → 0.2.0, build 42; the app's built Info.plist stamped (version, build, commit, date) before code signing, signature valid; `scripts/build-cli.sh` → `memoir --version` = `memoir 0.2.0 (3005f27, modified)` on a dirty tree, plain `swift build` → `memoir dev`; server `version.py` → same string; protocol checks on both sides. 36 Swift tests + 4 server tests (`python3 -m unittest discover -s tests -p test_version.py`). Deployed on spark-0e81 (`memoir-asr 0.2.0+3 (052e515)`). |
+| **Reconnecting** (2026-10-26) | 6 Swift tests: the timeline and audio history, and 4 against a fake memoir-asr on 127.0.0.1 — a drop mid-call (re-sent from the end of the last finished line, the whole call transcribed with no gap or overlap, segment numbers unique, the unfinished line cleared), a `busy` server waited out, `unauthorized` gives up, Stop with no server still ends; stable over 6 runs. **Live** against memoir-asr on the Spark through an SSH tunnel killed mid-stream for 3 s: "connection lost … reconnecting", "reconnected after 4 s", all six sentences of a 22 s clip transcribed (one word repeated at the seam). Not yet seen in the app on a real call. |
 
 Synthetic test audio (`say`) proves the pipeline; the live-mic run shows it works on a real voice.
 Accuracy on real calls (and the other side's audio) comes with the call tap (M2).
@@ -407,3 +408,13 @@ Problems hit while installing, and their fixes (newest last).
     as the reference and silences mic blocks that are only the leak. `memoir listen` prints what it did
     at the end; `meeting.json` has `echo_gate`. **Check it:** Microphone + this Mac's audio, play a
     video with speech in the headphones, stay quiet → no Me lines; talk over it → your words as Me.
+11. **Calls died with "lost the server: … Software caused connection abort"** (2026-10-26) — 4 and 30
+    minutes in. Not Wi-Fi (`LQM: good`) and not the server (it only saw the socket go). Memoir's network
+    log at the second: `Connected Path: unsatisfied (Local network prohibited)`. Cause: **Jamf
+    re-installs Self Service+ about every 32 minutes**; each time macOS re-applies all network policy
+    (Tailscale, Cisco Secure Client, Local Network privacy) and Memoir's allowance is briefly removed
+    (`nehelper: Removing UUIDs for (io.github.the-dsvolk.memoir)`), which aborts its live connection; it's
+    back within 0.25–4 s. To see it: `log show --predicate 'process == "Memoir" AND subsystem ==
+    "com.apple.network"'` around the drop, and `process == "nehelper"` for the "apps installed
+    notification". **Fix:** reconnecting (DESIGN.md §6) — the call goes on through a drop. Worth telling IT
+    too: a Jamf policy re-installing the same app every half hour is usually a broken install retrying.

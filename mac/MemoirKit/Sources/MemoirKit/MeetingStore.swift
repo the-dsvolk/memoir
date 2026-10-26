@@ -137,6 +137,17 @@ public final class MeetingStore: @unchecked Sendable {
         }
     }
 
+    /// A dropped connection, in `meeting.json` `reconnects`: when (meeting clock), why, and how long it
+    /// took to get back (nil if it never did).
+    public func addReconnect(at t: Double, reason: String, downtime: Double?) throws {
+        try lock.withLock {
+            var entry: [String: Any] = ["t": (t * 10).rounded() / 10, "reason": reason]
+            if let downtime { entry["down_s"] = (downtime * 10).rounded() / 10 }
+            details["reconnects"] = (details["reconnects"] as? [[String: Any]] ?? []) + [entry]
+            try writeDetails()
+        }
+    }
+
     /// Ends the record: closes the files and stamps `ended_at` (and the server's backup path).
     public func finish(serverPath: String?) throws {
         try lock.withLock {

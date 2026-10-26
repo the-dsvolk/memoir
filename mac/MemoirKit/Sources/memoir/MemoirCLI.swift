@@ -296,6 +296,7 @@ struct MemoirCLI {
 
         var transcript = LiveTranscript(labelled: sources.count > 1)
         var failed: String?
+        var dropped: (t: Double, reason: String)?  // a connection drop not yet recovered from
         for await event in events {
             switch event {
             case .ready(let model, let chunkMs, let serverVersion):
@@ -321,7 +322,15 @@ struct MemoirCLI {
                 Terminal.err("\r\u{1B}[2Kno system audio yet — if something is playing, allow your terminal app under "
                              + "System Settings › Privacy & Security › Screen & System Audio Recording "
                              + "(System Audio Recording Only), then restart it\n")
+            case .reconnecting(let reason):
+                dropped = (session.elapsed, reason)
+                Terminal.err("\r\u{1B}[2Kconnection lost (\(reason)) — reconnecting; still recording\n")
+            case .reconnected(let downtime):
+                Terminal.err("\r\u{1B}[2Kreconnected after \(durationText(downtime)) — catching up\n")
+                if let dropped { try? store?.addReconnect(at: dropped.t, reason: dropped.reason, downtime: downtime) }
+                dropped = nil
             case .stopped(let serverPath, let latency):
+                if let lost = dropped { try? store?.addReconnect(at: lost.t, reason: lost.reason, downtime: nil) }
                 Terminal.render(transcript.finish())
                 try store?.finish(serverPath: serverPath)
                 Terminal.err("\n")
@@ -333,6 +342,7 @@ struct MemoirCLI {
                                  + (gate.leakDb.map { String(format: " (the call leaked into the mic at %.0f dB)", $0) } ?? "") + "\n")
                 }
             case .failed(let message):
+                if let lost = dropped { try? store?.addReconnect(at: lost.t, reason: lost.reason, downtime: nil) }
                 failed = message
             }
         }

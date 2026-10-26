@@ -12,6 +12,17 @@ public final class StreamClient: @unchecked Sendable {
         task.maximumMessageSize = 1 << 20
     }
 
+    /// Opens the socket, sends `start` and waits for `ready` — giving up after `timeout` seconds (a
+    /// half-open network can otherwise leave the handshake hanging for a minute).
+    public func open(_ start: StartMessage, timeout: Double) async throws -> ServerMessage {
+        let timer = Task { [task] in
+            try? await Task.sleep(for: .seconds(timeout))
+            if !Task.isCancelled { task.cancel(with: .goingAway, reason: nil) }  // open() then throws
+        }
+        defer { timer.cancel() }
+        return try await open(start)
+    }
+
     /// Opens the socket, sends `start` and waits for `ready`.
     public func open(_ start: StartMessage) async throws -> ServerMessage {
         task.resume()
@@ -54,7 +65,36 @@ public final class StreamClient: @unchecked Sendable {
         }
     }
 
+    /// A WebSocket ping: true if the pong came back within `timeout` seconds.
+    public func ping(timeout: Double) async -> Bool {
+        let answered = Once()
+        return await withCheckedContinuation { continuation in
+            task.sendPing { error in
+                if answered.claim() { continuation.resume(returning: error == nil) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if answered.claim() { continuation.resume(returning: false) }
+            }
+        }
+    }
+
     public func close() {
         task.cancel(with: .normalClosure, reason: nil)
     }
+
+    /// Whether trying again could help: not for a wrong token or a protocol mismatch.
+    public static func isRetryable(_ error: Error) -> Bool {
+        switch error {
+        case MemoirError.server(let code, _): code == "busy"
+        case MemoirError.protocolMismatch, MemoirError.missingToken: false
+        default: true
+        }
+    }
+}
+
+/// Lets exactly one of several callbacks through.
+private final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool { lock.withLock { defer { done = true }; return !done } }
 }
