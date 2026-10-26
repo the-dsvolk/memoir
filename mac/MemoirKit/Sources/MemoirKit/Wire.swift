@@ -19,6 +19,9 @@ public enum Source: UInt8, Sendable {
 public enum Wire {
     public static let sampleRate = 16_000
     public static let headerSize = 12
+    /// The wire protocol's version, separate from memoir's: bumped only when messages or frames change
+    /// incompatibly, so a mismatched app and server fail with a clear message (DESIGN.md §6).
+    public static let protocolVersion = 1
 
     /// 12-byte header — source (u8), 3 reserved bytes, sample offset (u64 LE) — then PCM s16le.
     public static func audioFrame(source: Source, sampleOffset: UInt64, samples: [Int16]) -> Data {
@@ -42,6 +45,8 @@ public struct StartMessage: Encodable, Sendable {
     public let sources: [String]
     public let sampleRate = Wire.sampleRate
     public let encoding = "pcm_s16le"
+    public let protocolVersion = Wire.protocolVersion
+    public let clientVersion = MemoirVersion.current.display
 
     public init(meetingId: String, title: String, prep: String = "", app: String = "", sources: [Source]) {
         self.meetingId = meetingId
@@ -55,6 +60,8 @@ public struct StartMessage: Encodable, Sendable {
         case type, title, prep, app, sources, encoding
         case meetingId = "meeting_id"
         case sampleRate = "sample_rate"
+        case protocolVersion = "protocol"
+        case clientVersion = "client_version"
     }
 }
 
@@ -99,6 +106,8 @@ public struct ServerMessage: Decodable, Sendable, Equatable {
     public var path: String?
     public var code: String?
     public var message: String?
+    public var serverVersion: String?  // in `ready`, from servers since 0.3
+    public var protocolVersion: Int?  // in `ready`; absent = 1
 
     public init(type: String, source: String? = nil, seg: Int? = nil, text: String? = nil, t0: Double? = nil) {
         self.type = type
@@ -111,5 +120,7 @@ public struct ServerMessage: Decodable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case type, source, seg, t0, t1, text, upto, model, path, code, message
         case chunkMs = "chunk_ms"
+        case serverVersion = "server_version"
+        case protocolVersion = "protocol"
     }
 }

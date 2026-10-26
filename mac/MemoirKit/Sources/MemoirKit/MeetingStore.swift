@@ -116,11 +116,12 @@ public final class MeetingStore: @unchecked Sendable {
         }
     }
 
-    /// Server details for `meeting.json` (model, chunk size).
-    public func setServer(model: String, chunkMs: Int) throws {
+    /// Server details for `meeting.json` (model, chunk size, memoir-asr's version if it says).
+    public func setServer(model: String, chunkMs: Int, version: String? = nil) throws {
         try lock.withLock {
             details["model"] = model
             details["chunk_ms"] = chunkMs
+            if let version { details["server_version"] = version }
             try writeDetails()
         }
     }
@@ -209,6 +210,7 @@ public final class MeetingStore: @unchecked Sendable {
         json["started_at"] = Self.iso(startedAt)
         json["sources"] = sources.map(\.name)
         json["client"] = client
+        json["client_version"] = MemoirVersion.current.display  // which build recorded it
         json["save_audio"] = saveAudio
         let data = try JSONSerialization.data(withJSONObject: json,
                                               options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])

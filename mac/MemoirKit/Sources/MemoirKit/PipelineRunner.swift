@@ -14,6 +14,8 @@ public struct StepState: Codable, Sendable, Equatable {
     public var url: String?
     /// The files it wrote, relative to the call folder.
     public var outputs: [String]?
+    /// The memoir build that ran it.
+    public var memoirVersion: String?
 
     public init(status: Status, startedAt: Date? = nil, message: String? = nil) {
         self.status = status
@@ -213,6 +215,7 @@ public final class PipelineRunner: @unchecked Sendable {
     private func execute(_ step: PipelineStep) async -> StepState {
         let started = Date()
         var result = StepState(status: .running, startedAt: started)
+        result.memoirVersion = MemoirVersion.current.display
         do {
             let info = try? CallInfo.load(call)
             let argv = step.run.map { fill($0, info) }

@@ -4,6 +4,7 @@ import MemoirKit
 let usage = """
     usage: memoir listen [options]
            memoir process <call-folder> [options]
+           memoir --version
 
     memoir listen — streams your microphone and/or what the Mac is playing to memoir-asr on the Spark,
     prints the live transcript, and records the call in its own folder: <save dir>/YYYY-MM-DD_<name>/
@@ -46,11 +47,13 @@ let usage = """
 enum Command {
     case listen(Options)
     case process(ProcessOptions)
+    case version
 
     static func parse(_ args: [String]) throws -> Command {
         switch args.first {
         case "listen": .listen(try Options.parse(Array(args.dropFirst())))
         case "process": .process(try ProcessOptions.parse(Array(args.dropFirst())))
+        case "--version", "-V", "version": .version
         default: throw UsageError()
         }
     }
@@ -210,6 +213,10 @@ struct MemoirCLI {
                 if let call = try await listen(options) { exit(await processAfterCall(call)) }
             case .process(let options):
                 exit(try await process(options))
+            case .version:
+                let version = MemoirVersion.current
+                print("memoir \(version.display)")
+                for line in version.details + ["wire protocol \(Wire.protocolVersion)"] { print("  \(line)") }
             }
         } catch let error as UsageError {
             if let message = error.message { Terminal.err("memoir: \(message)\n\n") }
@@ -291,9 +298,10 @@ struct MemoirCLI {
         var failed: String?
         for await event in events {
             switch event {
-            case .ready(let model, let chunkMs):
-                Terminal.err("connected to \(server.host ?? "server"): \(model), \(chunkMs) ms chunks\n")
-                try? store?.setServer(model: model, chunkMs: chunkMs)
+            case .ready(let model, let chunkMs, let serverVersion):
+                Terminal.err("connected to \(server.host ?? "server") (memoir-asr \(serverVersion ?? "before 0.3")): "
+                             + "\(model), \(chunkMs) ms chunks\n")
+                try? store?.setServer(model: model, chunkMs: chunkMs, version: serverVersion)
             case .capturing(let what):
                 for line in what { Terminal.err("listening to \(line)\n") }
                 Terminal.err("Ctrl-C to stop\n")

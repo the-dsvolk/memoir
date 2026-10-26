@@ -43,6 +43,7 @@ struct MenuView: View {
         Button("Settings…") { model.showSettings(openSettings) }
             .keyboardShortcut(",")
         Divider()
+        Button("About Memoir") { model.showAbout() }
         Button("Quit Memoir") { model.quit() }
             .keyboardShortcut("q")
     }

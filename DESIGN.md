@@ -521,7 +521,8 @@ D12); this copy is the backup that qmx indexing (§5.7) works from.
 
 ```json
 {"type":"start","meeting_id":"3f9a…","title":"Weekly sync","prep":"Attendees: Alice, Bob\nAgenda: Q4 plan",
- "app":"us.zoom.xos","sources":["me","them"],"sample_rate":16000,"encoding":"pcm_s16le"}
+ "app":"us.zoom.xos","sources":["me","them"],"sample_rate":16000,"encoding":"pcm_s16le",
+ "protocol":1,"client_version":"0.3.0"}
 {"type":"meta","title":"Weekly sync (Q4)"}
 {"type":"prep","t":754.0,"text":"Carol joined (finance)."}
 {"type":"note","id":"n3","t":815.2,"text":"beta → Q1? ask re staffing"}
@@ -535,6 +536,12 @@ meeting clock when typing began. The server keeps `note`, `prep` and `meta` in i
 Reconnecting sends the same `start` (same `meeting_id`); the server continues the same file and segment
 numbering.
 
+**Versions.** `protocol` is the wire protocol's version — bumped only when messages or frames change
+incompatibly, separately from memoir's release version (§9.1). The server refuses a different one with
+`{"type":"error","code":"protocol_mismatch","message":"… — update the server"}`, and the client refuses a
+`ready` with a different one; a side that doesn't send it (before 0.3) counts as protocol 1.
+`client_version` / `server_version` are informational: logged, and kept in the call's `meeting.json`.
+
 **Client → server, binary frames** — 12-byte header + PCM:
 
 | Offset | Size | Field |
@@ -547,7 +554,8 @@ numbering.
 **Server → client, text frames**
 
 ```json
-{"type":"ready","meeting_id":"3f9a…","model":"nvidia/nemotron-speech-streaming-en-0.6b@ebe59e5","resume_from":{"me":0,"them":0}}
+{"type":"ready","meeting_id":"3f9a…","model":"nvidia/nemotron-speech-streaming-en-0.6b@ebe59e5","resume_from":{"me":0,"them":0},
+ "server_version":"0.3.0","protocol":1}
 {"type":"partial","source":"them","seg":42,"t0":812.48,"text":"so the plan for next quarter is"}
 {"type":"final","source":"them","seg":42,"t0":812.48,"t1":817.90,"text":"So the plan for next quarter is to ship the beta."}
 {"type":"status","lag_ms":{"me":120,"them":340}}
@@ -662,17 +670,56 @@ Port map after M1:
 | **8770** | **memoir-asr** |
 | 11434 | Ollama (qmx) |
 
+### 9.1 Versions and releases
+
+**One version for the whole repo** — server, CLI and app ship together — taken from **git tags**
+`vX.Y.Z` on `main` (semver, `0.x` while it's personal). Nothing is bumped by hand: a build works out its
+version from `git describe`:
+
+| Build | Shows |
+|---|---|
+| exactly at `v0.2.0` | `0.2.0` |
+| 3 commits later | `0.2.0+3 (3005f27)` |
+| with uncommitted changes | `0.2.0+3 (3005f27, modified)` |
+| no stamp (plain `swift build`) | `dev` |
+
+The build number is the commit count (`git rev-list --count HEAD`) — it only grows, as macOS's
+`CFBundleVersion` should. `v0.2.0` (2026-10-25) is the first tag: everything before it.
+
+- **`scripts/version.sh`** is the one place that reads git: version, commits since the tag, commit,
+  modified flag, build number, build date; `--plist FILE` writes them into an Info.plist.
+- **Memoir.app:** a *Stamp version* build step (after everything else, before code signing) writes them
+  into the built app's Info.plist — so Finder's Get Info and crash reports show it too. Shown under
+  **About Memoir** (in the menu-bar menu: a menu-bar app has no visible app menu, so the standard About
+  item never appears) and as a *Version* row in Settings with **Copy** for bug reports.
+- **CLI:** `scripts/build-cli.sh` embeds the same Info.plist in the binary (`__TEXT,__info_plist`, read
+  by `Bundle.main` like an app's), so `memoir --version` matches the app. A plain `swift build` /
+  `swift test` still works and says `dev` — no generated source files, nothing to keep out of git.
+- **Server:** `memoir_asr/version.py` runs `git describe` in its checkout at start (the Spark runs from
+  one), logs it and sends it in `ready`.
+- **Recorded with the data:** `meeting.json` gets `client_version` and `server_version`, and each step
+  in `pipeline/state.json` its `memoir_version` — so a call folder says which build recorded and processed
+  it (e.g. before or after the echo gate).
+- **Releasing:** add a `## X.Y.Z — date` section to `CHANGELOG.md` in the PR that finishes it; after
+  merging, `scripts/release.sh X.Y.Z` on an up-to-date `main` checks it's clean and newer than the last
+  tag, tags, pushes the tag and creates the GitHub Release with that section as notes. It commits nothing,
+  so nothing is pushed to `main`. Then rebuild the app and CLI, and `git pull` + restart memoir-asr on the
+  Spark.
+
 ## 10. Repository layout
 
 ```
 memoir/
   DESIGN.md
+  CHANGELOG.md            # one section per release (§9.1)
+  scripts/                # version.sh (from git), build-cli.sh (stamped CLI), release.sh (§9.1)
   server/                 # Python — memoir-asr
     pyproject.toml
     Dockerfile            # Plan C only (§5.2)
     memoir_asr/
       __main__.py         # builds the engine, starts the server
-      protocol.py         # frame header, JSON messages
+      protocol.py         # frame header, JSON messages, protocol version
+      version.py          # memoir-asr's version from git (§9.1)
       session.py          # meeting + per-source state, resume
       vad.py              # Silero wrapper, utterance segmentation
       engine.py           # ASR thread, batched NeMo stream steps
@@ -684,8 +731,8 @@ memoir/
   mac/
     MemoirKit/            # Swift package, shared by the CLI and the app (D13)
       Sources/MemoirKit/  # capture, conversion, wire protocol, MeetingSession, TranscriptModel, MeetingStore,
-                          # PipelineConfig + PipelineRunner (§4.8), TOML
-      Sources/memoir/     # the `memoir` CLI: listen, process
+                          # PipelineConfig + PipelineRunner (§4.8), TOML, EchoGate, MemoirVersion (§9.1)
+      Sources/memoir/     # the `memoir` CLI: listen, process, --version
       Tests/
     MemoirApp/            # menu-bar app + overlay (M3); XcodeGen project.yml
     pipeline.example.toml # → ~/.config/memoir/pipeline.toml (§4.8)

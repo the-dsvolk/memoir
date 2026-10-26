@@ -13,10 +13,11 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .engine import Engine
-from .protocol import ProtocolError, error, parse_audio_frame, validate_start
+from .protocol import PROTOCOL, ProtocolError, error, parse_audio_frame, validate_start
 from .session import Session
 from .settings import Settings
 from .store import Store
+from .version import VERSION
 
 log = logging.getLogger(__name__)
 
@@ -53,15 +54,17 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             start = validate_start(json.loads(await ws.receive_text()))
         except (ProtocolError, ValueError, WebSocketDisconnect) as e:
             if not isinstance(e, WebSocketDisconnect):
-                await send(ws, error("bad_start", str(e)))
+                await send(ws, error(getattr(e, "code", "bad_start"), str(e)))
                 await ws.close(code=1002)
             return
 
         session = Session(start["meeting_id"], start["sources"], engine.frame_samples, engine.new_stream_id)
         store = Store(settings.data_dir, start, engine.model_label)
-        log.info("meeting %s started (%s)", start["meeting_id"], ", ".join(start["sources"]))
+        log.info("meeting %s started (%s; client %s)", start["meeting_id"], ", ".join(start["sources"]),
+                 start.get("client_version", "before 0.3"))
         await send(ws, {"type": "ready", "meeting_id": start["meeting_id"], "model": engine.model_label,
-                        "chunk_ms": settings.chunk_ms, "resume_from": {s: 0 for s in start["sources"]}})
+                        "chunk_ms": settings.chunk_ms, "resume_from": {s: 0 for s in start["sources"]},
+                        "server_version": VERSION, "protocol": PROTOCOL})
 
         connected = True
         audio = asyncio.Event()

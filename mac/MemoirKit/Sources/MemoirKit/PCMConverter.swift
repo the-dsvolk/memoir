@@ -9,6 +9,7 @@ public enum MemoirError: Error, CustomStringConvertible {
     case coreAudio(what: String, status: OSStatus)
     case missingToken(String)
     case localNetworkBlocked(String)
+    case protocolMismatch(server: Int, client: Int)
 
     public var description: String {
         switch self {
@@ -22,6 +23,9 @@ public enum MemoirError: Error, CustomStringConvertible {
         case .localNetworkBlocked(let host): "can't reach \(host): macOS reports no network for this app — if the server is on "
             + "your LAN, allow Local Network access for it (or your terminal app) in System Settings › Privacy & Security › "
             + "Local Network, then restart it"
+        case .protocolMismatch(let server, let client):
+            "memoir-asr speaks protocol \(server) and this memoir \(client) — update the "
+                + (server < client ? "server on the Spark (INSTALL.md › Server)" : "Mac app and CLI (INSTALL.md › Mac app)")
         }
     }
 }
