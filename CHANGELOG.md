@@ -6,6 +6,11 @@ tags `main` and publishes the section as the GitHub Release notes.
 
 ## Unreleased
 
+- **Reconnecting.** A dropped connection no longer ends the call ("lost the server: … Software caused
+  connection abort"): Memoir keeps recording, shows *reconnecting…*, reconnects within seconds and re-sends
+  the audio from the last finished line, so the transcript has no gap. Gives up only after 5 minutes without
+  a connection, or for errors retrying can't fix. Each drop is listed in the call's `meeting.json`
+  (`reconnects`). Works for Memoir.app and `memoir listen`; no server change.
 - **Versions.** The app, the CLI and the server know their version, from the last tag:
   - **Memoir.app:** About Memoir in the menu bar; a Version row in Settings with **Copy** (for bug reports).
   - **CLI:** `memoir --version`; build it with `scripts/build-cli.sh` to stamp it in (a plain `swift build` says `dev`).

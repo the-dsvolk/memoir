@@ -10,6 +10,7 @@ import SwiftUI
 final class AppModel {
     enum Status: Equatable {
         case idle, connecting, waitingForNetwork, live, stopping
+        case reconnecting(String)  // the connection dropped (why); still recording
         case failed(String)
     }
 
@@ -81,7 +82,15 @@ final class AppModel {
         refreshRecent()
     }
 
-    var isRecording: Bool { [.connecting, .waitingForNetwork, .live, .stopping].contains(status) }
+    var isRecording: Bool {
+        switch status {
+        case .connecting, .waitingForNetwork, .live, .stopping, .reconnecting: true
+        case .idle, .failed: false
+        }
+    }
+
+    /// A connection drop not recovered from yet: when (meeting clock) and why — for `meeting.json`.
+    @ObservationIgnored private var dropped: (t: Double, reason: String)?
 
     var sources: [Source] {
         switch source {
@@ -323,7 +332,15 @@ final class AppModel {
             transcript.apply(msg)
         case .silenceHint:
             silenceHint = true
+        case .reconnecting(let reason):
+            dropped = (elapsed, reason)
+            if status != .stopping { status = .reconnecting(reason) }
+        case .reconnected(let downtime):
+            if let dropped { try? store?.addReconnect(at: dropped.t, reason: dropped.reason, downtime: downtime) }
+            dropped = nil
+            if case .reconnecting = status { status = .live }
         case .stopped(let serverPath, let latency):
+            recordUnrecoveredDrop()
             if let gate = session?.echoGate?.stats { try? store?.setEchoGate(gate) }
             try? store?.finish(serverPath: serverPath)
             lastSummary = latency.summary
@@ -331,9 +348,15 @@ final class AppModel {
             finish(.idle)
             if let folder { afterCall(folder) }
         case .failed(let message):
+            recordUnrecoveredDrop()
             try? store?.finish(serverPath: nil)
             finish(.failed(message))
         }
+    }
+
+    private func recordUnrecoveredDrop() {
+        if let dropped { try? store?.addReconnect(at: dropped.t, reason: dropped.reason, downtime: nil) }
+        dropped = nil
     }
 
     private func finish(_ final: Status) {

@@ -533,8 +533,25 @@ In-person mode sends `"sources":["room"]`. `title` is the call's name and `prep`
 before it; `meta` renames the call, `prep` appends prep during it (§4.7). A note's or prep's `t` is the
 meeting clock when typing began. The server keeps `note`, `prep` and `meta` in its backup JSONL.
 
-Reconnecting sends the same `start` (same `meeting_id`); the server continues the same file and segment
-numbering.
+**Reconnecting (client-side, no server change).** When the connection drops mid-call, capture goes on;
+the Mac holds each source's audio (up to 5 min), retries — 0.25, 0.5, 1, 2, 3, then every 5 s, waiting
+out `busy` while the server notices the old connection is gone — and on success sends a new `start`
+(same `meeting_id`, current title). Each connection is a fresh server session that counts time and
+segments from zero, so the Mac:
+
+- **re-sends each source from the end of its last received final** (`t1`): the line in progress when
+  it dropped is transcribed again rather than lost — at worst a word is repeated at the seam;
+- **shifts** the new connection's `t0` / `t1` / `upto` by where it starts in the call, and its `seg`
+  numbers past every one seen so far — so `transcript.jsonl`, the overlay and the pipeline see one call;
+- **clears** the dropped connection's unfinished partials (as empty partials);
+- **pings** every 5 s (10 s to answer), so a connection that dies silently is noticed too.
+
+It gives up only for errors retrying can't fix (`unauthorized`, protocol mismatch) or after 5 min
+without a connection (`.failed`, the record kept); after Stop with no connection it tries 20 s more to
+send the rest, then ends normally. `meeting.json` lists each drop in `reconnects` (`t`, `reason`,
+`down_s`). Why it was needed: on 2026-10-26 two calls died with "Software caused connection abort" —
+macOS re-applies Local Network policy each time Jamf re-installs an app (every ~32 min) and briefly drops
+Memoir's allowance (INSTALL.md #11). The server keeps one backup JSONL per connection.
 
 **Versions.** `protocol` is the wire protocol's version — bumped only when messages or frames change
 incompatibly, separately from memoir's release version (§9.1). The server refuses a different one with
@@ -781,7 +798,7 @@ Teams / browser), the overlay app, notes, assist, resume. Run it: [`INSTALL.md`]
 menu bar, New Call… (name, sources, prep), the overlay (status pill, editable name, timer, live
 transcript, a **Notes | Prep** pane with a multi-line editor), Settings (shared config; one font for
 transcript and notes), and the per-call folder of §4.7 with `prep.md` and `notes.md`. Not yet:
-reconnect / resume, device-change handling, the quick-note hotkey, per-app taps.
+device-change handling, the quick-note hotkey, per-app taps. (Reconnecting: §6, 2026-10-26.)
 
 **After the call (2026-10-18, branch `feat/app`):** the pipeline of §4.8 — `pipeline.toml`,
 `PipelineRunner`, New Call's *After the call* choices, the progress row under the transcript with

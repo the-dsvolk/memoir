@@ -10,6 +10,7 @@ public enum MemoirError: Error, CustomStringConvertible {
     case missingToken(String)
     case localNetworkBlocked(String)
     case protocolMismatch(server: Int, client: Int)
+    case disconnected
 
     public var description: String {
         switch self {
@@ -26,6 +27,7 @@ public enum MemoirError: Error, CustomStringConvertible {
         case .protocolMismatch(let server, let client):
             "memoir-asr speaks protocol \(server) and this memoir \(client) — update the "
                 + (server < client ? "server on the Spark (INSTALL.md › Server)" : "Mac app and CLI (INSTALL.md › Mac app)")
+        case .disconnected: "not connected to the server right now (reconnecting)"
         }
     }
 }
