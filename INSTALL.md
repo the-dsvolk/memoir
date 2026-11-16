@@ -267,16 +267,22 @@ after Ctrl-C, or any time with `memoir process` (DESIGN.md §4.8). They're liste
 
 | Step | Runs | Makes |
 |---|---|---|
-| **Summary** | `uv run python main.py <call>` in `~/GitHub/Me/CursorSDKExample`, with `CURSOR_API_KEY` from the Keychain — a Cursor agent | `summary.md` in the call folder: summary, decisions, action items, your notes expanded |
+| **Summary** | `mac/steps/summary_qwen.py <call>` — Qwen (`qwen3.8-judge`) on the Spark, two passes: a draft, then a check of every decision, action item and confirmed note against the transcript. Local: nothing leaves your network, no key needed. About 15 min for a 45-min call | `summary.md` in the call folder: summary, decisions, action items, your notes expanded; the draft, checks and timings in `<call>/pipeline/summary/` |
 | **Google Doc** | `~/.claude/skills/md-to-gdoc/create_gdoc.sh <call>/summary.md "<name> — <date>"` | a new Google Doc in My Drive; its link is shown in the app |
 
 ### 1. Set it up
 
 ```bash
 cp mac/pipeline.example.toml ~/.config/memoir/pipeline.toml
-# The Cursor API key, once, in the login Keychain (it prompts for the key):
-security add-generic-password -a "$USER" -s cursor-api-key -w
+# Then set MEMOIR_ME_NAME (who "Me" is) and MEMOIR_LLM_URL in the Summary step's env.
+# Check the Spark's Qwen answers (at home; away, through a tunnel to its port 8000):
+curl -s http://spark-0e81.local:8000/v1/models
 ```
+
+The Summary step uses macOS's own `/usr/bin/python3` (standard library only). The example also has the
+older Cursor-agent Summary (commented out): faster and it researches follow-up notes, but it sends the call
+to Cursor and needs `CURSOR_API_KEY` in the Keychain
+(`security add-generic-password -a "$USER" -s cursor-api-key -w`).
 
 Each step runs through **your login shell** (`bash -l` here), so it sees the same PATH as Terminal
 (`uv`, `gcloud`, …) even though the app isn't started from one. Secrets come from the Keychain via
@@ -306,9 +312,10 @@ disabled with no exporters** ("No exporters were provided. This means that no te
 collected."). `wandb` stays off with `WANDB_MODE=disabled` — the server and smoke test set it. Audio
 and transcripts stay on the LAN; the server needs the bearer token.
 
-**The pipeline is different:** steps marked `remote = true` send the call off the Mac — Summary sends
-the transcript, prep and notes to Cursor (and its model provider), Google Doc puts the summary in your
-Drive. Untick them, or tick **Keep local only** (`--keep-local`), for calls that must stay local;
+**The pipeline is different:** steps marked `remote = true` send the call off the Mac — the Cursor
+Summary sends the transcript, prep and notes to Cursor (and its model provider), Google Doc puts the
+summary in your Drive. The local Summary (`remote = false`) sends them only to the Spark's Qwen, on your
+network. Untick them, or tick **Keep local only** (`--keep-local`), for calls that must stay local;
 running a remote step on such a call later asks first (`--allow-remote` in the CLI).
 
 ## Verified
