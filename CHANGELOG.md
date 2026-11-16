@@ -6,6 +6,19 @@ tags `main` and publishes the section as the GitHub Release notes.
 
 ## Unreleased
 
+- **Local Summary step.** `mac/steps/summary_qwen.py`: Qwen (`qwen3.8-judge`) on the Spark writes
+  `summary.md`, so nothing leaves your network and "Keep local only" calls get a summary too
+  (`remote = false`). It's now the Summary in `mac/pipeline.example.toml`, with the Cursor agent kept as a
+  commented-out alternative. Standard-library Python on macOS's `/usr/bin/python3`; no key needed.
+  - **Two passes:** a draft, then a check of every decision, action item and confirmed note against the
+    transcript. A decision is kept only if the check quotes the answer or acceptance, not just the question.
+  - **Your name:** "Me" is named in the prompt (`MEMOIR_ME_NAME`), so you're listed once.
+  - **Safe failures:** if a pass comes back empty or cut off, the step fails and an earlier `summary.md`
+    stays; the file is written via a temp file and a rename.
+  - **Clean output:** the `Date:` line is computed from `meeting.json`; `[mm:ss]` times are stripped in code;
+    follow-up notes are marked "not researched (local model, no tools)".
+  - **Extras:** the draft, the checks, the thinking and the timings go to `<call>/pipeline/summary/`.
+  - **Speed:** about 15 minutes for a 45-minute call, against ~2 for the Cursor agent.
 - **Reconnecting.** A dropped connection no longer ends the call ("lost the server: … Software caused
   connection abort"): Memoir keeps recording, shows *reconnecting…*, reconnects within seconds and re-sends
   the audio from the last finished line, so the transcript has no gap. Gives up only after 5 minutes without

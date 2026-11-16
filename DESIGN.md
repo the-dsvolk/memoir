@@ -42,7 +42,7 @@ home LAN (no on-device fallback — decided).
 | D5 | **One continuous stream per source; the pipeline's end-of-utterance detector closes segments** | Fixed 1.5 s windows; Silero VAD | The model streams natively (D2); NeMo's streaming pipeline cuts its running text into timed, punctuated finals (Silero not needed in v1). |
 | D6 | **Port 8770** on the Spark | 8000 | 8000 is vLLM's default; 8770 sits next to qmx's 8765 and is free. |
 | D7 | **In-person mode = mic only**, labelled **Room** | Call apps only | Same pipeline minus the tap; needs no system-audio permission. |
-| D8 | **After the call, a pipeline of steps on the Mac** (`~/.config/memoir/pipeline.toml`, §4.8) — today a Cursor-SDK agent writes `summary.md` (summary, decisions, action items, my notes expanded), then `create_gdoc.sh` makes it a Google Doc. Chosen per call in New Call, with **Keep local only** *(revised 2026-10-18)* | Notes expanded on the Spark by `qwen3.6:35b-a3b` (the first plan, §5.6); one hard-wired summarizer | The transcript alone is the least useful part; a strong model with my tools and org context (MCP) does more than a local one, and steps are scripts I can swap without rebuilding the app. |
+| D8 | **After the call, a pipeline of steps on the Mac** (`~/.config/memoir/pipeline.toml`, §4.8) — a Summary step writes `summary.md` (summary, decisions, action items, my notes expanded): on the personal Mac **Qwen on the Spark, local** (`mac/steps/summary_qwen.py`, *2026-11-16*); on the work Mac a Cursor-SDK agent; optionally `create_gdoc.sh` makes it a Google Doc. Chosen per call in New Call, with **Keep local only** *(revised 2026-10-18, 2026-11-16)* | Notes expanded on the Spark by `qwen3.6:35b-a3b` (the first plan, §5.6); one hard-wired summarizer | The transcript alone is the least useful part. A strong model with my tools and org context (MCP) does the most; a local model keeps the call on my network and still beats the raw transcript; steps are scripts I can swap without rebuilding the app. |
 | D9 | **Live assist = qmx retrieval** over its MCP endpoint, with meetings indexed into qmx | A separate RAG stack | qmx already runs embeddings, a reranker and the index on the same Spark. |
 | D10 | **English only** — ASR language fixed to English, no auto-detect | Auto-detect / per-meeting language | No language-ID flips on short chunks; English prompts and question heuristics; English-only ASR models become candidates. |
 | D11 | **Speaker diarization (for now): `nvidia/diar_streaming_sortformer_4spk-v2.1`** — streaming, on the Them / Room audio, next to Nemotron; words assigned to speakers by time ("Them 1", "Them 2") | Multitalker Parakeet (one ASR per speaker); per-sentence embeddings + clustering | NeMo-native, 117M, up to 4 speakers, ~1 s latency, DER 6.7 % (2-speaker calls) to 16.7 % (AMI) at its low-latency setting; NVIDIA Open Model License. Not implemented yet. |
@@ -268,11 +268,11 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
 
 ### 4.8 After the call — the pipeline (D8)
 
-When a call is saved, a short **pipeline of steps runs on the Mac** against its folder: today
-**Summary** (a Cursor-SDK agent writes `summary.md` — summary, decisions, action items, my notes
-expanded and checked against the transcript) and then **Google Doc** (`create_gdoc.sh` turns
-`summary.md` into a doc in My Drive). The steps are scripts listed in `~/.config/memoir/pipeline.toml`,
-so they change without rebuilding the app; Memoir.app and the CLI read the same file.
+When a call is saved, a short **pipeline of steps runs on the Mac** against its folder: **Summary**
+(`summary.md` — summary, decisions, action items, my notes expanded and checked against the transcript)
+and, optionally, **Google Doc** (`create_gdoc.sh` turns `summary.md` into a doc in My Drive). The steps
+are scripts listed in `~/.config/memoir/pipeline.toml`, so they change without rebuilding the app;
+Memoir.app and the CLI read the same file.
 
 ```toml
 min_finals = 5                      # shorter calls aren't processed automatically
@@ -280,20 +280,47 @@ min_finals = 5                      # shorter calls aren't processed automatical
 [[step]]
 id = "summary"
 label = "Summary"
-cwd = "~/GitHub/Me/CursorSDKExample"
-run = ["uv", "run", "python", "main.py", "{call}"]
-keychain = { CURSOR_API_KEY = "cursor-api-key" }   # security find-generic-password -a $USER -s … -w
+run = ["/usr/bin/python3", "-I", "~/Git/the-dsvolk/memoir/mac/steps/summary_qwen.py", "{call}"]
+env = { MEMOIR_LLM_URL = "http://127.0.0.1:18000/v1", MEMOIR_ME_NAME = "Dmitry Volkov" }
 outputs = ["summary.md"]
-remote = true                       # sends the call off this Mac
+remote = false                      # stays on my network: runs on "Keep local only" calls too
 default = true                      # ticked in New Call
-timeout = 1800
+timeout = 2400
 
 [[step]]
 id = "gdoc"
 label = "Google Doc"
 needs = ["summary"]
 run = ["~/.claude/skills/md-to-gdoc/create_gdoc.sh", "{call}/summary.md", "{name} — {date}"]
+default = false
 ```
+
+**The local Summary** (`mac/steps/summary_qwen.py`, standard-library Python 3.9 with its prompts in
+`mac/steps/prompts/`) calls `qwen3.8-judge` on the Spark's vLLM (OpenAI API, port 8000; away from home
+through an SSH tunnel to that port, like the one for 8770 — hence `127.0.0.1:18000` below) with thinking at **medium** effort — `xhigh` can
+spend its whole token budget thinking and never answer. Two passes:
+
+1. **Summary:** the Summary prompt, adapted for a model with no tools, plus `meeting.json`,
+   `transcript.txt`, `prep.md` and `notes.md` inline (`transcript.jsonl` duplicates the text). The
+   prompt says who "Me" is (`MEMOIR_ME_NAME`), so I'm listed once. The `Date:` line is computed in the
+   script from `meeting.json`, in the Mac's time zone, and put in place of whatever the model writes.
+2. **Check** (JSON schema): every decision, action item and note marked confirmed gets a verdict, the
+   evidence and the **agreement** — the quote that settles it (the answer or acceptance, not the question
+   or proposal; for a task, the owner taking it on). No agreement, no "supported": a decision becomes
+   "preferred, not confirmed" or is dropped. It also lists what the draft missed, and returns the
+   corrected `summary.md`.
+
+If pass 1 comes back empty or cut off, pass 2 doesn't run (on an empty draft it once wrote a new summary
+from scratch); if pass 2 is cut off or unreadable, the step fails too. Either way the step exits non-zero
+and an earlier `summary.md` stays. `[mm:ss]` times are stripped in code after each pass. Follow-up notes
+("verify …") are expanded from the transcript and marked *Follow-up: not researched (local model, no
+tools)*. The draft, the checks, the thinking and the timings go to `<call>/pipeline/summary/`. About
+15 minutes for a 45-minute call (~25 tok/s with thinking), against ~2 minutes for the Cursor agent.
+
+Measured against the Cursor agent (Opus) on one work call: figures, owners and no duplicates are right,
+and the check pass catches made-up details, but it still promoted a preference or an unanswered question
+to a decision, missed about three action items, and listed me twice — the agreement quote and the name
+are the fixes for those. Good enough for "Keep local only" calls, not yet a match for Opus with tools.
 
 **Steps.** `run` is an argv (no shell quoting) with `{call}`, `{folder}`, `{name}`, `{date}` filled
 in; `cwd` defaults to the call folder; `needs` orders them (a small DAG — loops and unknown names are
@@ -340,10 +367,11 @@ defaults), skipping finished ones: `--step ID` (again, with what it needs), `--f
 `--allow-remote`, `-v`; Ctrl-C cancels; links go to stdout. `memoir listen` takes `--steps`,
 `--keep-local` and `--no-process`, and runs the pipeline after the call.
 
-**Docs go into a Drive folder** — `create_gdoc.sh`'s optional 3rd argument (a folder ID or URL), set in
+**Docs go into a Drive folder** (when Google Doc is on) — `create_gdoc.sh`'s optional 3rd argument (a folder ID or URL), set in
 `pipeline.toml`; here the "Memoir" folder.
 
-**Not yet:** updating an existing Google Doc on a re-run (the script always makes a new one);
+**Not yet:** a separate pass that walks the transcript in chunks for missed action items (the check
+pass still misses some); updating an existing Google Doc on a re-run (the script always makes a new one);
 an `enhanced/` folder and provenance (model, prompt version) for each output; steps
 that write back to Jira / Slack (they'd need an approval step).
 
@@ -477,7 +505,8 @@ D12); this copy is the backup that qmx indexing (§5.7) works from.
 ### 5.6 Notes expansion (M4)
 
 > **Superseded (2026-10-18)** by the Mac pipeline (§4.8, D8): notes are expanded in `summary.md` by
-> the Summary step. Kept as the design for a **local** step later (one that never leaves the LAN).
+> the Summary step — since 2026-11-16 a **local** one on the personal Mac (Qwen on the Spark, called
+> from the Mac). Kept for the record of the first plan.
 
 - Notes arrive as `note` messages and are appended to the JSONL as they come.
 - At `stop`, after the last final is written, the server makes **one call** to `qwen3.6:35b-a3b` on
@@ -617,8 +646,9 @@ Finals follow the pipeline's 800 ms end-of-utterance window (not yet measured on
   TLS or Tailscale before it ever leaves the home LAN.
 - Transcripts `0600` — in the call folders on the Mac (folders `0700`, §4.7) and the backup under
   `~/.memoir` on the Spark; raw audio off by default.
-- Notes expansion and assist stay on the Spark (local Ollama and qmx) — nothing goes to a cloud
-  service.
+- Notes expansion and assist stay on the Spark (local Ollama and qmx), and so does the local Summary
+  step (Qwen on the Spark's vLLM) — nothing goes to a cloud service. The Cursor Summary and Google Doc
+  steps are `remote = true` (§4.8).
 - **Consent is on the user.** Some jurisdictions require every participant's consent to record or
   transcribe a call, and employers may restrict sending work-meeting audio to personal hardware. The
   overlay always shows that transcription is on.
@@ -753,6 +783,9 @@ memoir/
       Tests/
     MemoirApp/            # menu-bar app + overlay (M3); XcodeGen project.yml
     pipeline.example.toml # → ~/.config/memoir/pipeline.toml (§4.8)
+    steps/                # pipeline steps that ship with memoir (§4.8)
+      summary_qwen.py     # the local Summary: Qwen on the Spark, two passes → summary.md
+      prompts/            # summary.md (pass 1), verify.md (pass 2)
   deploy/
     memoir-asr.service
     memoir-index.path     # + .service — runs `qmx index` after each meeting
@@ -768,6 +801,9 @@ memoir/
   recorded call plus LibriSpeech samples at real-time speed and reports partial/final latency p50/p95
   and WER against reference text.
 - **Mac unit tests:** framer, resampler (48 kHz stereo → 16 kHz mono), transcript model.
+- **Pipeline step tests** (`/usr/bin/python3 -m unittest discover -s mac/steps`): the local Summary
+  against a fake server — the written summary, the Date line, times stripped, and every failure (empty or
+  cut-off pass, unreadable check, server unreachable) leaving an earlier `summary.md` untouched.
 - **Manual test plan:** Zoom test call and Teams "make a test call"; AirPods connect/disconnect
   mid-call; system-audio permission denied; Spark unreachable for 20 s then back (resume without gaps);
   60-minute call for lag build-up; an in-person meeting (mic only); notes typed during a call come out
@@ -802,8 +838,9 @@ device-change handling, the quick-note hotkey, per-app taps. (Reconnecting: §6,
 
 **After the call (2026-10-18, branch `feat/app`):** the pipeline of §4.8 — `pipeline.toml`,
 `PipelineRunner`, New Call's *After the call* choices, the progress row under the transcript with
-Open / Copy Link, Recent Calls, a notification, and `memoir process`. Steps today: the Cursor-SDK
-summary and `create_gdoc.sh`.
+Open / Copy Link, Recent Calls, a notification, and `memoir process`. Steps then: the Cursor-SDK
+summary and `create_gdoc.sh`. **Local Summary (2026-11-16, branch `feat/qwen-summary`):** Qwen on the
+Spark (§4.8), the default on the personal Mac; Google Doc off there.
 
 **Later:** expanding a note live, during the meeting; LLM-composed
 answers in hints by default; word timestamps (the pipeline's word-level output); speaker diarization
@@ -836,9 +873,10 @@ fallback.
 13. **Call-folder defaults to confirm** (§4.7) — a name already used that day gets `_2`; saving audio
     is off. (Decided: prep in `prep.md`, written in New Call and append-only during the call; notes in
     `notes.md` during the call only.)
-14. **Remote steps and policy** (§4.8) — Summary sends work-call transcripts to Cursor and its model
-    provider; Google Doc puts summaries in Drive. Confirm both are approved uses for meeting content,
-    and whether Summary and Google Doc should stay ticked by default.
+14. **Remote steps and policy** (§4.8) — the Cursor Summary sends work-call transcripts to Cursor and
+    its model provider; Google Doc puts summaries in Drive. Confirm both are approved uses for meeting
+    content. (Decided for the personal Mac, 2026-11-16: the local Summary only, ticked by default;
+    Google Doc off.)
 15. **Re-runs make a new Google Doc** each time (`create_gdoc.sh` only creates). Update the same doc
     instead (Drive `files.update` with conversion — to verify)? (Decided: docs go into a Drive folder,
     `create_gdoc.sh`'s optional 3rd argument — set in `pipeline.toml`.)

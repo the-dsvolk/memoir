@@ -12,22 +12,41 @@
 
 min_finals = 5  # calls with fewer finished lines aren't processed automatically
 
-# Summary, decisions, action items and expanded notes → <call>/summary.md, written by a Cursor agent.
+# Summary, decisions, action items and expanded notes → <call>/summary.md, written by Qwen on the Spark
+# (mac/steps/summary_qwen.py: two passes, a draft and then a check against the transcript). Nothing leaves
+# your network, so it also runs on "Keep local only" calls. About 15 minutes for a 45-minute call.
 # The same as running, in Terminal:
-#   cd ~/GitHub/Me/CursorSDKExample
-#   export CURSOR_API_KEY="$(security find-generic-password -a "$USER" -s cursor-api-key -w)"
-#   uv run python main.py <call-folder>
+#   MEMOIR_ME_NAME="Your Name" python3 ~/Git/the-dsvolk/memoir/mac/steps/summary_qwen.py <call-folder>
+# MEMOIR_LLM_URL: http://spark-0e81.local:8000/v1 works at home; away from home, forward the Spark's port 8000
+# through an SSH tunnel (e.g. -L 127.0.0.1:18000:127.0.0.1:8000) and use http://127.0.0.1:18000/v1.
+# The draft, the check results, the thinking and the timings go to <call>/pipeline/summary/.
 [[step]]
 id = "summary"
 label = "Summary"
-description = "A Cursor agent writes summary.md: the summary, decisions, action items, and your notes expanded and checked against the transcript."
-cwd = "~/GitHub/Me/CursorSDKExample"
-run = ["uv", "run", "python", "main.py", "{call}"]
-keychain = { CURSOR_API_KEY = "cursor-api-key" }  # login Keychain, account = your user
+description = "Qwen on the Spark writes summary.md: the summary, decisions, action items, and your notes expanded and checked against the transcript. Nothing leaves your network."
+run = ["/usr/bin/python3", "-I", "~/Git/the-dsvolk/memoir/mac/steps/summary_qwen.py", "{call}"]
+env = { MEMOIR_LLM_URL = "http://spark-0e81.local:8000/v1", MEMOIR_LLM_MODEL = "qwen3.8-judge", MEMOIR_LLM_EFFORT = "medium", MEMOIR_ME_NAME = "<your name>" }
 outputs = ["summary.md"]
-remote = true    # sends the transcript to Cursor — off for "Keep local only" calls
+remote = false   # stays on your network — runs on "Keep local only" calls too
 default = true   # ticked in New Call
-timeout = 1800
+timeout = 2400
+
+# Or: a Cursor agent (Opus, with your MCP tools) writes summary.md in about 2 minutes and researches your
+# follow-up notes, but sends the transcript, prep and notes to Cursor. Use one Summary step or the other.
+#   cd ~/GitHub/Me/CursorSDKExample
+#   export CURSOR_API_KEY="$(security find-generic-password -a "$USER" -s cursor-api-key -w)"
+#   uv run python main.py <call-folder>
+# [[step]]
+# id = "summary"
+# label = "Summary"
+# description = "A Cursor agent writes summary.md: the summary, decisions, action items, and your notes expanded and checked against the transcript."
+# cwd = "~/GitHub/Me/CursorSDKExample"
+# run = ["uv", "run", "python", "main.py", "{call}"]
+# keychain = { CURSOR_API_KEY = "cursor-api-key" }  # login Keychain, account = your user
+# outputs = ["summary.md"]
+# remote = true    # sends the transcript to Cursor — off for "Keep local only" calls
+# default = true
+# timeout = 1800
 
 # summary.md → a new Google Doc; the script prints the doc's link last. The optional 3rd argument is
 # the Drive folder to put it in (its ID or URL); without it the doc goes to the root of My Drive.
