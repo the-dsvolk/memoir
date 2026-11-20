@@ -125,10 +125,23 @@ Two **capture modes**, picked in the menu bar:
 ### 4.2 Microphone ("Me")
 
 - `AVAudioEngine` input node; choose the device by setting `kAudioOutputUnitProperty_CurrentDevice` on
-  `inputNode.audioUnit` before start.
-- **Tap in the hardware format** (`inputNode.outputFormat(forBus: 0)`) and convert with
-  `AVAudioConverter` (`downmix = true`) to 16 kHz mono. The input node does no format conversion —
-  asking `installTap` for 16 kHz directly crashes.
+  `inputNode.audioUnit` before start. **Which device:** `mic` in `config.toml` (app Settings › Calls ›
+  Microphone, which stores the device's name; a Core Audio UID works too; CLI `--mic`, `memoir mics` lists
+  them); empty = the system default input. A chosen mic that isn't connected falls back to the system
+  default, and the app and CLI say so. Why it matters: a MacBook docked with the **lid closed** keeps its
+  built-in mic as the default input, and that mic then delivers exact zeros — a 40-minute call on
+  2026-11-20 had no Me at all while the call app used the webcam's mic.
+- **Tap in the device's format** (`inputNode.inputFormat(forBus: 0)`, as a standard float format) and
+  convert with `AVAudioConverter` (`downmix = true`) to 16 kHz mono. The input node does no format
+  conversion — asking `installTap` for 16 kHz directly crashes. After switching devices,
+  `outputFormat(forBus: 0)` still describes the default input until the engine starts, and a tap in that
+  format gets nothing (a C920 is 2 ch at 16 kHz, the built-in mic 1 ch at 48 kHz).
+- **Dead-mic warning (`SilenceWatch`).** A working mic is never digitally silent — even in a quiet room
+  its noise floor is −60 dBFS or more (C920: −37 dBFS) — while a dead one (lid closed, muted interface)
+  sends exact zeros. So the raw mic, before the echo gate (which silences on purpose), is watched: no
+  sample above ±3 (≈ −80 dBFS) for **30 s** → the app shows an orange line in the overlay and posts a
+  notification, the CLI prints a warning; both clear when sound comes back. Pauses in speech don't trigger
+  it. `meeting.json` records `mic: {device, missing?, silent_s}`.
 - Rebuild tap + converter on `AVAudioEngineConfigurationChange` (rate/channel changes stop the engine).
 - **Start the mic before the call tap** — otherwise AirPods can stay in A2DP and the mic is silent.
 - **No voice processing** (`setVoiceProcessingEnabled`): it ducks all other audio, including the call,
@@ -260,7 +273,11 @@ The Mac folder is the record of a call; the Spark keeps a backup (§5.5).
   save_dir   = "~/memoir"
   save_audio = false
   server     = "ws://spark-0e81.local:8770/v1/stream"
+  echo_gate  = true
+  mic        = ""      # a device name (Settings › Calls › Microphone) or UID; "" = system default
   ```
+
+  Saving from Settings rewrites only these keys' lines; comments and other lines in the file stay.
 
   The CLI follows the same file, with flags to override:
   `memoir listen --name "Weekly sync" --prep "agenda: …" [--prep-file agenda.md] [--out DIR] [--save-audio]`

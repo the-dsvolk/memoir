@@ -6,6 +6,19 @@ tags `main` and publishes the section as the GitHub Release notes.
 
 ## Unreleased
 
+- **Choose the microphone, and know when it's dead.** A call on 2026-11-20 had no Me at all: the MacBook
+  was docked with the lid closed, its built-in mic was still the default input, and with the lid shut it
+  records pure silence.
+  - **Settings › Calls › Microphone** picks the mic (stored as `mic` in `config.toml`, by name); System
+    default stays the default. If the chosen one isn't connected, the system default is used and the
+    overlay says so. New Call shows which mic the call will use. CLI: `--mic NAME`, and `memoir mics` lists
+    the inputs.
+  - **Silent-mic warning:** after 30 s with nothing at all from the mic (not just quiet: a working mic's
+    noise floor is far above it), the overlay shows an orange line and macOS posts a notification; the CLI
+    prints a warning. `meeting.json` records `mic: {device, missing?, silent_s}`.
+  - Saving Settings now keeps comments and other lines in `config.toml` instead of rewriting the file.
+  - Builds with the Command Line Tools' Swift 6.1 again (`@preconcurrency import AVFoundation` in
+    `PCMConverter.swift`).
 - **Local Summary step.** `mac/steps/summary_qwen.py`: Qwen (`qwen3.8-judge`) on the Spark writes
   `summary.md`, so nothing leaves your network and "Keep local only" calls get a summary too
   (`remote = false`). It's now the Summary in `mac/pipeline.example.toml`, with the Cursor agent kept as a

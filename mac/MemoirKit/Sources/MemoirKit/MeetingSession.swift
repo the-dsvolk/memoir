@@ -11,9 +11,11 @@ public struct SessionOptions: Sendable {
     public var app: String  // client label stored by the server ("memoir-app", "memoir-cli")
     /// With mic + system audio: silence the mic while it only hears the call (`EchoGate`).
     public var echoGate: Bool
+    /// The microphone to use: a device UID or name (`mic` in the config); nil or "" for the system default.
+    public var micDevice: String?
 
     public init(server: URL, token: String, sources: [Source], name: String, prep: String = "",
-                input: URL? = nil, app: String, echoGate: Bool = true) {
+                input: URL? = nil, app: String, echoGate: Bool = true, micDevice: String? = nil) {
         self.server = server
         self.token = token
         self.sources = sources
@@ -22,6 +24,7 @@ public struct SessionOptions: Sendable {
         self.input = input
         self.app = app
         self.echoGate = echoGate
+        self.micDevice = micDevice
     }
 }
 
@@ -30,6 +33,12 @@ public enum SessionEvent: Sendable {
     case capturing([String])  // what is being captured, for display
     case message(ServerMessage)  // partial, final, notes_ready, error — in the call's times and numbering
     case silenceHint  // system audio has been silent for 5 s — likely no permission
+    /// The chosen microphone isn't connected; the system default (`using`) records instead.
+    case micMissing(wanted: String, using: String)
+    /// The mic has sent pure silence for `SilenceWatch.limit` seconds — a closed lid, a muted or dead mic.
+    case micSilent(device: String, seconds: Double)
+    /// Sound from the mic again after `micSilent`.
+    case micHeard
     /// The connection dropped: capture goes on, the audio is kept, the session reconnects (DESIGN.md §6).
     case reconnecting(reason: String)
     /// Connected again after `downtime` seconds; the audio since the last finished line is re-sent.
@@ -48,6 +57,10 @@ public final class MeetingSession: @unchecked Sendable {
 
     /// The echo gate in use (mic + system audio with `echoGate` on), for its stats at the end.
     public let echoGate: EchoGate?
+    /// Watches the live mic for pure silence (a dead mic), for the warning and its stats at the end.
+    public let micSilence: SilenceWatch?
+    /// The microphone in use once capturing, and the chosen one if it wasn't connected.
+    public var mic: (device: String, missing: String?)? { lock.withLock { micInUse } }
 
     /// How long to keep trying to reconnect — and so how much audio to hold — before giving up.
     var maxOutage: Double = 300
@@ -66,6 +79,7 @@ public final class MeetingSession: @unchecked Sendable {
     private var captures: [Capture] = []
     private var startedAt: Double?
     private var stopping = false
+    private var micInUse: (device: String, missing: String?)?
 
     public init(options: SessionOptions) {
         self.options = options
@@ -73,6 +87,8 @@ public final class MeetingSession: @unchecked Sendable {
         meetingId = String(options.app.prefix(3)) + "-" + UUID().uuidString.prefix(6).lowercased()
         let both = options.sources.contains(.me) && options.sources.contains(.them)
         echoGate = options.echoGate && both && options.input == nil ? EchoGate() : nil
+        let mic = options.sources.contains(.me) || options.sources.contains(.room)
+        micSilence = mic && options.input == nil ? SilenceWatch() : nil
     }
 
     /// Seconds since the server said `ready` — the meeting clock used for note timestamps.
@@ -98,14 +114,20 @@ public final class MeetingSession: @unchecked Sendable {
             } else if let input = options.input {
                 captures = [try Capture.file(input)]
             } else {
-                captures = try await Capture.start(options.sources, echoGate: echoGate)
+                captures = try await Capture.start(options.sources, echoGate: echoGate, micDevice: options.micDevice,
+                                                   silence: micSilence)
             }
         } catch {
             first.close()
             throw error
         }
-        lock.withLock { self.captures = captures }
+        let mic = captures.first { $0.device != nil }
+        lock.withLock {
+            self.captures = captures
+            micInUse = mic?.device.map { ($0, mic?.missing) }
+        }
         emit.yield(.capturing(captures.map(\.description)))
+        if let mic, let wanted = mic.missing, let using = mic.device { emit.yield(.micMissing(wanted: wanted, using: using)) }
         let pump = SessionPump(session: self, emit: emit, chunkMs: chunkMs)
         Task { await pump.run(first: first, captures: captures) }
         return events
@@ -238,6 +260,12 @@ final class SessionPump: @unchecked Sendable {
             if !heardSystem, !warnedSilence, now - began > 5 {
                 warnedSilence = true
                 emit.yield(.silenceHint)
+            }
+        }
+        if source != .them, let watch = session.micSilence, let change = watch.take() {
+            switch change {
+            case .silent: emit.yield(.micSilent(device: session.mic?.device ?? "the microphone", seconds: watch.limit))
+            case .heard: emit.yield(.micHeard)
             }
         }
         session.onAudio?(source, chunk)
@@ -466,20 +494,26 @@ struct Capture: Sendable {
     let chunks: AsyncStream<[Int16]>
     let description: String
     let stop: @Sendable () -> Void
+    /// A microphone capture: the device in use, and the chosen one if it wasn't connected.
+    var device: String?
+    var missing: String?
 
-    /// With `echoGate`, the mic goes through it and the system audio feeds it.
-    static func start(_ sources: [Source], echoGate: EchoGate? = nil) async throws -> [Capture] {
+    /// With `echoGate`, the mic goes through it and the system audio feeds it; `silence` sees the raw mic.
+    static func start(_ sources: [Source], echoGate: EchoGate? = nil, micDevice: String? = nil,
+                      silence: SilenceWatch? = nil) async throws -> [Capture] {
         var captures: [Capture] = []
         if sources.contains(.me) || sources.contains(.room) {  // mic first: AirPods can stay in A2DP otherwise
             guard await MicCapture.requestAccess() else { throw MemoirError.microphoneDenied }
             var process: (@Sendable ([Int16], Double) -> [Int16])?
             if let echoGate { process = { samples, time in echoGate.near(samples, at: time) } }
-            let mic = MicCapture(process: process)
+            let mic = MicCapture(device: micDevice, silence: silence, process: process)
             let source: Source = sources.contains(.room) ? .room : .me
             let gated = echoGate == nil ? "" : ", echo gate on"
-            captures.append(Capture(source: source, chunks: try mic.start(),
-                                    description: "the microphone (\(MicCapture.defaultInputName)) as \(source.label)\(gated)",
-                                    stop: { mic.stop() }))
+            let chunks = try mic.start()
+            let missing = mic.missingDevice.map { " — \($0) isn't connected" } ?? ""
+            captures.append(Capture(source: source, chunks: chunks,
+                                    description: "the microphone (\(mic.deviceName)\(missing)) as \(source.label)\(gated)",
+                                    stop: { mic.stop() }, device: mic.deviceName, missing: mic.missingDevice))
         }
         if sources.contains(.them) {
             var observe: (@Sendable ([Int16], Double) -> Void)?

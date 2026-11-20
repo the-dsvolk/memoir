@@ -47,6 +47,10 @@ final class AppModel {
     var serverVersion = UserDefaults.standard.string(forKey: "lastServerVersion")
     var capturing = ""
     var silenceHint = false
+    /// The mic has sent pure silence for 30 s: its name (DESIGN.md §4.2). Cleared when sound comes back.
+    var micSilent: String?
+    /// The mic chosen in Settings isn't connected: (chosen, used instead).
+    var micMissing: (wanted: String, using: String)?
     var lastSummary = ""
     var overlayVisible = false
     var quickNotes: [QuickNote] = []
@@ -111,6 +115,8 @@ final class AppModel {
         quickNotes.removeAll()
         prepAdditions.removeAll()
         silenceHint = false
+        micSilent = nil
+        micMissing = nil
         lastSummary = ""
         startedAt = nil
         status = .connecting
@@ -132,7 +138,7 @@ final class AppModel {
                 // A session is single-use, so each attempt gets a fresh one.
                 let session = MeetingSession(options: SessionOptions(
                     server: server, token: token, sources: sources, name: name, prep: prep, app: "memoir-app",
-                    echoGate: config.echoGate))
+                    echoGate: config.echoGate, micDevice: config.mic))
                 if newStore.saveAudio {
                     session.onAudio = { source, samples in try? newStore.record(audio: samples, from: source) }
                 }
@@ -332,6 +338,15 @@ final class AppModel {
             transcript.apply(msg)
         case .silenceHint:
             silenceHint = true
+        case .micMissing(let wanted, let using):
+            micMissing = (wanted, using)
+        case .micSilent(let device, let seconds):
+            micSilent = device
+            Notifier.shared.post(title: "No sound from \(device)",
+                                 body: "Memoir has heard nothing from the microphone for \(Int(seconds)) s — is the lid closed or the mic muted? Choose another in Settings › Calls › Microphone.",
+                                 open: nil)
+        case .micHeard:
+            micSilent = nil
         case .reconnecting(let reason):
             dropped = (elapsed, reason)
             if status != .stopping { status = .reconnecting(reason) }
@@ -342,6 +357,7 @@ final class AppModel {
         case .stopped(let serverPath, let latency):
             recordUnrecoveredDrop()
             if let gate = session?.echoGate?.stats { try? store?.setEchoGate(gate) }
+            if let mic = session?.mic { try? store?.setMic(device: mic.device, missing: mic.missing, silence: session?.micSilence?.stats) }
             try? store?.finish(serverPath: serverPath)
             lastSummary = latency.summary
             let folder = store?.folder
@@ -435,6 +451,8 @@ final class AppModel {
             prepAdditions.removeAll()
             prep = ""
             silenceHint = false
+            micSilent = nil
+            micMissing = nil
             startedAt = nil
             status = .idle
             if pipelineStates[folder.path] == nil { pipelineStates[folder.path] = PipelineState.load(folder) }
