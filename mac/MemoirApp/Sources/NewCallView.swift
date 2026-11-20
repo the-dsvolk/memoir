@@ -70,8 +70,13 @@ struct NewCallView: View {
 
             HStack {
                 if source != "system" {
-                    Text("With the microphone and this Mac's audio, wear headphones so the mic doesn't hear the call too.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Microphone: \(micInUse) · change it in Settings › Calls")
+                        if source == "mic+system" {
+                            Text("Wear headphones so the mic doesn't hear the call too.")
+                        }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Cancel") { dismissWindow(id: "new-call") }
@@ -146,6 +151,14 @@ struct NewCallView: View {
     private var folderPreview: String {
         let url = model.config.saveDirectory.appendingPathComponent(MeetingStore.folderName(date: Date(), name: name))
         return (url.path as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// The mic a call started now would use — so a closed lid's silent built-in mic shows before the call.
+    private var micInUse: String {
+        let chosen = model.config.mic
+        let system = AudioDevices.defaultInput()?.name ?? "the system default"
+        if chosen.isEmpty { return "\(system) (system default)" }
+        return AudioDevices.find(chosen)?.name ?? "\(chosen) isn't connected — \(system) instead"
     }
 
     private func start() {

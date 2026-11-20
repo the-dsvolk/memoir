@@ -137,6 +137,18 @@ public final class MeetingStore: @unchecked Sendable {
         }
     }
 
+    /// The microphone in `meeting.json` `mic`: the device, the one chosen if it wasn't connected, and how
+    /// much of the call it sent pure silence for (stretches of 30 s or more — a closed lid, a muted mic).
+    public func setMic(device: String, missing: String? = nil, silence: SilenceWatch.Stats? = nil) throws {
+        try lock.withLock {
+            var mic: [String: Any] = ["device": device]
+            if let missing { mic["missing"] = missing }
+            if let silence { mic["silent_s"] = (silence.silentSeconds * 10).rounded() / 10 }
+            details["mic"] = mic
+            try writeDetails()
+        }
+    }
+
     /// A dropped connection, in `meeting.json` `reconnects`: when (meeting clock), why, and how long it
     /// took to get back (nil if it never did).
     public func addReconnect(at t: Double, reason: String, downtime: Double?) throws {

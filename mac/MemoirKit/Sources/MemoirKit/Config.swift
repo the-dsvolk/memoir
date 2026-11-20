@@ -11,6 +11,8 @@ public struct MemoirConfig: Sendable, Equatable {
     public var tokenFile = "~/.config/memoir/token"
     /// With mic + system audio, silence the mic while it only hears the call (`EchoGate`).
     public var echoGate = true
+    /// The microphone: a device name (as Settings stores it) or UID; "" for the system default input.
+    public var mic = ""
 
     public init() {}
 
@@ -28,26 +30,46 @@ public struct MemoirConfig: Sendable, Equatable {
             case ("server", .string(let s)): config.server = s
             case ("token_file", .string(let s)): config.tokenFile = s
             case ("echo_gate", .bool(let b)): config.echoGate = b
+            case ("mic", .string(let s)): config.mic = s
             default: continue
             }
         }
         return config
     }
 
+    /// Writes the settings. An existing file keeps its comments and other lines: each setting's line is
+    /// replaced where it is, and settings it doesn't have yet are added at the end.
     public func save(path: String = defaultPath) throws {
         let url = URL(fileURLWithPath: Self.expand(path))
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
-        let text = """
-            # memoir settings — shared by Memoir.app and the `memoir` CLI (DESIGN.md §4.7)
-            save_dir   = \(Self.quote(saveDir))
-            save_audio = \(saveAudio)
-            server     = \(Self.quote(server))
-            token_file = \(Self.quote(tokenFile))
-            echo_gate  = \(echoGate)
-
-            """
-        try text.write(to: url, atomically: true, encoding: .utf8)
+        let settings: [(key: String, value: String)] = [
+            ("save_dir", Self.quote(saveDir)),
+            ("save_audio", "\(saveAudio)"),
+            ("server", Self.quote(server)),
+            ("token_file", Self.quote(tokenFile)),
+            ("echo_gate", "\(echoGate)"),
+            ("mic", Self.quote(mic)),
+        ]
+        let line = { (key: String, value: String) in key.padding(toLength: 10, withPad: " ", startingAt: 0) + " = " + value }
+        guard let existing = try? String(contentsOf: url, encoding: .utf8) else {
+            let text = "# memoir settings — shared by Memoir.app and the `memoir` CLI (DESIGN.md §4.7)\n"
+                + settings.map(line).joined(separator: "\n") + "\n"
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            return
+        }
+        var lines = existing.components(separatedBy: "\n")
+        if lines.last == "" { lines.removeLast() }
+        var written = Set<String>()
+        for (index, text) in lines.enumerated() {
+            guard let eq = text.firstIndex(of: "=") else { continue }
+            let key = text[..<eq].trimmingCharacters(in: .whitespaces)
+            guard let setting = settings.first(where: { $0.key == key }), !written.contains(key) else { continue }
+            lines[index] = line(setting.key, setting.value)
+            written.insert(key)
+        }
+        lines += settings.filter { !written.contains($0.key) }.map(line)
+        try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
     }
 
     public var saveDirectory: URL { URL(fileURLWithPath: Self.expand(saveDir), isDirectory: true) }

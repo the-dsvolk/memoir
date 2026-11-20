@@ -4,6 +4,7 @@ import MemoirKit
 let usage = """
     usage: memoir listen [options]
            memoir process <call-folder> [options]
+           memoir mics
            memoir --version
 
     memoir listen — streams your microphone and/or what the Mac is playing to memoir-asr on the Spark,
@@ -20,6 +21,8 @@ let usage = """
       --no-process       don't run the pipeline after the call (memoir process can run it later)
       --no-echo-gate     with mic+system, don't silence the mic while it only hears the call
                          (default from echo_gate in the config, on)
+      --mic NAME|UID     the microphone to use (default from mic in the config, else the system's
+                         input); `memoir mics` lists them. Warns if the mic sends only silence for 30 s
       --out DIR         save folder (default from ~/.config/memoir/config.toml, else ~/memoir)
       --save-audio       also save the audio, one WAV per source, in the call's folder
       --no-record        don't write a call folder (quick tests)
@@ -36,6 +39,8 @@ let usage = """
       --list             show the steps and where this call stands, then exit
       -v, --verbose      show the steps' output as they run
 
+    memoir mics — lists the audio inputs: their names and UIDs, the system default and the one chosen.
+
     both:
       --pipeline PATH    pipeline file (default ~/.config/memoir/pipeline.toml)
       -h, --help         show this help
@@ -47,12 +52,14 @@ let usage = """
 enum Command {
     case listen(Options)
     case process(ProcessOptions)
+    case mics
     case version
 
     static func parse(_ args: [String]) throws -> Command {
         switch args.first {
         case "listen": .listen(try Options.parse(Array(args.dropFirst())))
         case "process": .process(try ProcessOptions.parse(Array(args.dropFirst())))
+        case "mics": .mics
         case "--version", "-V", "version": .version
         default: throw UsageError()
         }
@@ -84,6 +91,7 @@ struct Options {
     var keepLocal = false
     var process = true
     var echoGate = true
+    var mic: String?
     var pipeline = PipelineConfig.defaultPath
 
     var sources: [Source] {
@@ -119,6 +127,7 @@ struct Options {
             case "--keep-local": options.keepLocal = true
             case "--no-process": options.process = false
             case "--no-echo-gate": options.echoGate = false
+            case "--mic": options.mic = try args.value(flag)
             case "--pipeline": options.pipeline = try args.value(flag)
             case "--out": options.out = try args.value(flag)
             case "--save-audio": options.saveAudio = true
@@ -213,6 +222,8 @@ struct MemoirCLI {
                 if let call = try await listen(options) { exit(await processAfterCall(call)) }
             case .process(let options):
                 exit(try await process(options))
+            case .mics:
+                listMics()
             case .version:
                 let version = MemoirVersion.current
                 print("memoir \(version.display)")
@@ -226,6 +237,23 @@ struct MemoirCLI {
             Terminal.err("\nmemoir: \(error)\n")
             exit(1)
         }
+    }
+
+    static func listMics() {
+        let chosen = MemoirConfig.load().mic
+        let devices = AudioDevices.inputs()
+        let system = AudioDevices.defaultInput()
+        for device in devices {
+            var marks: [String] = []
+            if device.id == system?.id { marks.append("system default") }
+            if !chosen.isEmpty, AudioDevices.find(chosen, in: devices) == device { marks.append("chosen in config") }
+            print("\(device.name)" + (marks.isEmpty ? "" : "  [\(marks.joined(separator: ", "))]"))
+            print("    uid: \(device.uid)")
+        }
+        if !chosen.isEmpty, AudioDevices.find(chosen, in: devices) == nil {
+            print("chosen in config but not connected: \(chosen) (the system default is used)")
+        }
+        if chosen.isEmpty { print("config: mic = \"\" (the system default)") }
     }
 
     /// A finished call and what to run on it.
@@ -268,7 +296,8 @@ struct MemoirCLI {
             : nil
         let session = MeetingSession(options: SessionOptions(
             server: server, token: try config.token(), sources: sources, name: name, prep: options.prep,
-            input: options.input, app: "memoir-cli", echoGate: config.echoGate && options.echoGate))
+            input: options.input, app: "memoir-cli", echoGate: config.echoGate && options.echoGate,
+            micDevice: options.mic ?? config.mic))
         if let store, store.saveAudio {
             session.onAudio = { source, samples in try? store.record(audio: samples, from: source) }
         }
@@ -322,6 +351,13 @@ struct MemoirCLI {
                 Terminal.err("\r\u{1B}[2Kno system audio yet — if something is playing, allow your terminal app under "
                              + "System Settings › Privacy & Security › Screen & System Audio Recording "
                              + "(System Audio Recording Only), then restart it\n")
+            case .micMissing(let wanted, let using):
+                Terminal.err("\r\u{1B}[2K\(wanted) isn't connected — using \(using) instead\n")
+            case .micSilent(let device, let seconds):
+                Terminal.err("\r\u{1B}[2Kno sound from \(device) for \(Int(seconds)) s — is the lid closed or the mic muted? "
+                             + "Pick another with --mic (memoir mics lists them) and restart\n")
+            case .micHeard:
+                Terminal.err("\r\u{1B}[2Ksound from the mic again\n")
             case .reconnecting(let reason):
                 dropped = (session.elapsed, reason)
                 Terminal.err("\r\u{1B}[2Kconnection lost (\(reason)) — reconnecting; still recording\n")
@@ -331,11 +367,16 @@ struct MemoirCLI {
                 dropped = nil
             case .stopped(let serverPath, let latency):
                 if let lost = dropped { try? store?.addReconnect(at: lost.t, reason: lost.reason, downtime: nil) }
+                if let mic = session.mic { try? store?.setMic(device: mic.device, missing: mic.missing, silence: session.micSilence?.stats) }
                 Terminal.render(transcript.finish())
                 try store?.finish(serverPath: serverPath)
                 Terminal.err("\n")
                 if let store { Terminal.err("saved to \(store.folder.path)\n") }
                 Terminal.err("server backup: \(serverPath ?? "?")\n\(latency.summary)\n")
+                if let mic = session.mic, let silence = session.micSilence?.stats, silence.silentSeconds > 0 {
+                    Terminal.err(String(format: "mic: %@ sent only silence for %.0f s of %.0f s\n", mic.device,
+                                        silence.silentSeconds, silence.micSeconds))
+                }
                 if let gate = session.echoGate?.stats {
                     try? store?.setEchoGate(gate)
                     Terminal.err(String(format: "echo gate: silenced %.1f s of %.0f s of mic audio", gate.gatedSeconds, gate.micSeconds)

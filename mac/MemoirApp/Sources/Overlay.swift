@@ -69,6 +69,14 @@ struct OverlayView: View {
                 Text("No system audio yet — if something is playing, allow Memoir under System Settings › Privacy & Security › Screen & System Audio Recording, then restart Memoir.")
                     .font(.caption).foregroundStyle(.orange)
             }
+            if let device = model.micSilent {
+                Text("No sound from \(device) for 30 s — is the lid closed or the mic muted? Your words aren't being transcribed. Choose another microphone in Settings › Calls, then stop and start the call.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if let missing = model.micMissing {
+                Text("\(missing.wanted) isn't connected — recording from \(missing.using) instead.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if model.status == .waitingForNetwork {
                 Text("Waiting for network access — if macOS asks, allow Memoir to find devices on your local network (System Settings › Privacy & Security › Local Network).")
                     .font(.caption).foregroundStyle(.orange)

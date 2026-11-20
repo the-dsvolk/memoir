@@ -7,6 +7,8 @@ struct SettingsView: View {
     let model: AppModel
     @State private var config = MemoirConfig.load()
     @State private var saveError: String?
+    @State private var mics: [AudioInputDevice] = []
+    @State private var systemMic: AudioInputDevice?
     @AppStorage(TextAppearance.fontKey) private var fontName = ""
     @AppStorage(TextAppearance.sizeKey) private var fontSize = TextAppearance.defaultSize
     @AppStorage(TextAppearance.backgroundKey) private var background = TextAppearance.defaultBackground
@@ -60,6 +62,26 @@ struct SettingsView: View {
                         Button("Choose…") { chooseFolder() }
                     }
                 }
+                LabeledContent {
+                    HStack {
+                        Picker("Microphone", selection: $config.mic) {
+                            Text("System default" + (systemMic.map { " (\($0.name))" } ?? "")).tag("")
+                            Divider()
+                            ForEach(mics) { device in  // tagged as the config names it (a name, or a hand-written UID)
+                                Text(device.name).tag(device.uid == config.mic ? config.mic : device.name)
+                            }
+                            if !config.mic.isEmpty, AudioDevices.find(config.mic, in: mics) == nil {
+                                Text("\(config.mic) (not connected)").tag(config.mic)
+                            }
+                        }
+                        .labelsHidden()
+                        Button { refreshMics() } label: { Image(systemName: "arrow.clockwise") }
+                            .help("Look for microphones again")
+                    }
+                } label: {
+                    Text("Microphone")
+                    Text("For Me. With the MacBook's lid closed its own mic records only silence — choose the webcam or headset mic. If the one chosen isn't connected, the system default is used.")
+                }
                 Toggle("Save audio (one WAV per source, about 115 MB an hour each)", isOn: $config.saveAudio)
                 Toggle(isOn: $config.echoGate) {
                     Text("Silence the mic while it only hears the call")
@@ -110,7 +132,10 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 520)
-        .onAppear { config = MemoirConfig.load() }
+        .onAppear {
+            config = MemoirConfig.load()
+            refreshMics()
+        }
         .onChange(of: config) {
             do {
                 try config.save()
@@ -120,6 +145,11 @@ struct SettingsView: View {
                 saveError = "Couldn't save settings: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func refreshMics() {
+        mics = AudioDevices.inputs()
+        systemMic = AudioDevices.defaultInput()
     }
 
     private var customColorBinding: Binding<Color> {
