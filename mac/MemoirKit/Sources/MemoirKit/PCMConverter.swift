@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation  // AVAudioFormat is Sendable only in newer SDKs (the Air builds with Swift 6.1 CLT)
 
 public enum MemoirError: Error, CustomStringConvertible {
     case converter(String)
